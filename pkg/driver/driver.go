@@ -25,7 +25,7 @@ import (
 	"google.golang.org/grpc/status"
 	"k8s.io/kubernetes/pkg/util/mount"
 
-	"gitlab.devops.nifcloud.net/x_nke/nfcl-nas-csi-driver/pkg/cloud"
+	"github.com/ryo-watanabe/nfcl-nas-csi-driver/pkg/cloud"
 )
 
 type NifcloudNasDriverConfig struct {
@@ -195,4 +195,28 @@ func (driver *NifcloudNasDriver) Run(endpoint string) {
 	s := NewNonBlockingGRPCServer()
 	s.Start(endpoint, driver.ids, driver.cs, driver.ns)
 	s.Wait()
+}
+
+func NewVolumeCapabilityAccessMode(mode csi.VolumeCapability_AccessMode_Mode) *csi.VolumeCapability_AccessMode {
+	return &csi.VolumeCapability_AccessMode{Mode: mode}
+}
+
+func NewControllerServiceCapability(cap csi.ControllerServiceCapability_RPC_Type) *csi.ControllerServiceCapability {
+	return &csi.ControllerServiceCapability{
+		Type: &csi.ControllerServiceCapability_Rpc{
+			Rpc: &csi.ControllerServiceCapability_RPC{
+				Type: cap,
+			},
+		},
+	}
+}
+
+func NewNodeServiceCapability(cap csi.NodeServiceCapability_RPC_Type) *csi.NodeServiceCapability {
+	return &csi.NodeServiceCapability{
+		Type: &csi.NodeServiceCapability_Rpc{
+			Rpc: &csi.NodeServiceCapability_RPC{
+				Type: cap,
+			},
+		},
+	}
 }

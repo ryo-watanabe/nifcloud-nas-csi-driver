@@ -24,6 +24,8 @@ import (
 
 	"github.com/golang/glog"
 	"google.golang.org/grpc"
+	pbSanitizer "github.com/kubernetes-csi/csi-lib-utils/protosanitizer"
+	"golang.org/x/net/context"
 
 	csi "github.com/container-storage-interface/spec/lib/go/csi/v0"
 )
@@ -115,4 +117,16 @@ func (s *nonBlockingGRPCServer) serve(endpoint string, ids csi.IdentityServer, c
 
 	server.Serve(listener)
 
+}
+
+func logGRPC(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+	glog.V(3).Infof("GRPC call: %s", info.FullMethod)
+	glog.V(5).Infof("GRPC request: %+v", pbSanitizer.StripSecretsCSI03(req).String())
+	resp, err := handler(ctx, req)
+	if err != nil {
+		glog.Errorf("GRPC error: %v", err)
+	} else {
+		glog.V(5).Infof("GRPC response: %+v", resp)
+	}
+	return resp, err
 }

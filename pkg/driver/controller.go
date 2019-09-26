@@ -17,9 +17,9 @@ limitations under the License.
 package driver
 
 import (
-	"fmt"
-	"strings"
-	"strcnv"
+	//"fmt"
+	//"strings"
+	"strconv"
 
 	csi "github.com/container-storage-interface/spec/lib/go/csi/v0"
 	"github.com/golang/glog"
@@ -29,8 +29,8 @@ import (
 
 	"github.com/alice02/nifcloud-sdk-go/service/nas"
 
-	"gitlab.devops.nifcloud.net/x_nke/nfcl-nas-csi-driver/pkg/cloud"
-	"gitlab.devops.nifcloud.net/x_nke/nfcl-nas-csi-driver/pkg/util"
+	"github.com/ryo-watanabe/nfcl-nas-csi-driver/pkg/cloud"
+	"github.com/ryo-watanabe/nfcl-nas-csi-driver/pkg/util"
 )
 
 const (
@@ -46,6 +46,7 @@ const (
 // Volume attributes
 const (
 	attrIp     = "ip"
+	attrVolume = "volume"
 )
 
 // CreateVolume parameters
@@ -119,7 +120,7 @@ func (s *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 			}
 
 			// Adding the reserved IP to the instance input
-			nasInput.MasterPrivateAddress = reservedIP
+			nasInput.MasterPrivateAddress = &reservedIP
 		} else {
 			// If the param was not provided
 			return nil, status.Error(codes.InvalidArgument, paramReservedIPv4CIDR + " must be provided")
@@ -131,7 +132,7 @@ func (s *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 			return nil, status.Error(codes.Internal, err.Error())
 		}
 	}
-	return &csi.CreateVolumeResponse{Volume: fileInstanceToCSIVolume(n, modeInstance)}, nil
+	return &csi.CreateVolumeResponse{Volume: s.nasInstanceToCSIVolume(n)}, nil
 }
 
 // reserveIPRange returns the available IP in the cidr
@@ -156,7 +157,7 @@ func (s *controllerServer) getCloudInstancesReservedIPs(ctx context.Context) (ma
 	// Initialize an empty reserved list. It will be populated with all the reservedIPRanges obtained from the cloud instances
 	cloudInstancesReservedIPs := make(map[string]bool)
 	for _, instance := range instances {
-		cloudInstancesReservedIPs[instance.Endpoint.PrivateAddress] = true
+		cloudInstancesReservedIPs[*instance.Endpoint.PrivateAddress] = true
 	}
 	return cloudInstancesReservedIPs, nil
 }
@@ -169,15 +170,14 @@ func (s *controllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVolu
 	if volumeId == "" {
 		return nil, status.Error(codes.InvalidArgument, "volume id is empty")
 	}
-	filer, _, err := getFileInstanceFromId(volumeId)
+	nas, err := s.config.cloud.GetNasInstanceFromVolumeId(ctx, volumeId)
 	if err != nil {
 		// An invalid ID should be treated as doesn't exist
 		glog.V(5).Infof("failed to get instance for volume %v deletion: %v", volumeId, err)
 		return &csi.DeleteVolumeResponse{}, nil
 	}
 
-	filer.Project = s.config.metaService.GetProject()
-	err = s.config.fileService.DeleteInstance(ctx, filer)
+	err = s.config.cloud.DeleteNasInstance(ctx, *nas.NASInstanceIdentifier)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
@@ -197,19 +197,10 @@ func (s *controllerServer) ValidateVolumeCapabilities(ctx context.Context, req *
 	}
 
 	// Check that the volume exists
-	filer, _, err := getFileInstanceFromId(volumeId)
+	_, err := s.config.cloud.GetNasInstanceFromVolumeId(ctx, volumeId)
 	if err != nil {
 		// An invalid id format is treated as doesn't exist
 		return nil, status.Error(codes.NotFound, err.Error())
-	}
-
-	filer.Project = s.config.metaService.GetProject()
-	newFiler, err := s.config.fileService.GetInstance(ctx, filer)
-	if err != nil && !file.IsNotFoundErr(err) {
-		return nil, status.Error(codes.Internal, err.Error())
-	}
-	if newFiler == nil {
-		return nil, status.Error(codes.NotFound, fmt.Sprintf("volume %v doesn't exist", volumeId))
 	}
 
 	// Validate that the volume matches the capabilities
@@ -256,12 +247,47 @@ func getRequestCapacity(capRange *csi.CapacityRange) int64 {
 }
 
 // fileInstanceToCSIVolume generates a CSI volume spec from the cloud Instance
-func fileInstanceToCSIVolume(n *nas.NASInstance, mode string) *csi.Volume {
+func (s *controllerServer) nasInstanceToCSIVolume(n *nas.NASInstance) *csi.Volume {
+	capacityBytes, _ := strconv.ParseInt(*n.AllocatedStorage, 10, 64)
 	return &csi.Volume{
-		Id: s.generateVolumeIdFromNasInstance(n),
-		CapacityBytes: strconv.ParseInt(n.AllocatedStorage, 10, 64),
+		Id: s.config.cloud.GenerateVolumeIdFromNasInstance(n),
+		CapacityBytes: capacityBytes,
 		Attributes: map[string]string{
-			attrIp: n.Endpoint.PrivateAddress,
+			attrIp: *n.Endpoint.PrivateAddress,
 		},
 	}
+}
+
+///// Not implemented methods
+
+func (s *controllerServer) ControllerPublishVolume(ctx context.Context, req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "ControllerPublishVolume unsupported")
+}
+
+func (s *controllerServer) ControllerUnpublishVolume(ctx context.Context, req *csi.ControllerUnpublishVolumeRequest) (*csi.ControllerUnpublishVolumeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "ControllerUnpublishVolume unsupported")
+}
+
+func (s *controllerServer) ListVolumes(ctx context.Context, req *csi.ListVolumesRequest) (*csi.ListVolumesResponse, error) {
+	// https://cloud.google.com/compute/docs/reference/beta/disks/list
+	// List volumes in the whole region? In only the zone that this controller is running?
+	return nil, status.Error(codes.Unimplemented, "")
+}
+
+func (s *controllerServer) GetCapacity(ctx context.Context, req *csi.GetCapacityRequest) (*csi.GetCapacityResponse, error) {
+	// https://cloud.google.com/compute/quotas
+	// DISKS_TOTAL_GB.
+	return nil, status.Error(codes.Unimplemented, "")
+}
+
+func (s *controllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateSnapshotRequest) (*csi.CreateSnapshotResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "CreateSnapshot unsupported")
+}
+
+func (s *controllerServer) DeleteSnapshot(ctx context.Context, req *csi.DeleteSnapshotRequest) (*csi.DeleteSnapshotResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "DeleteSnapshot unsupported")
+}
+
+func (s *controllerServer) ListSnapshots(ctx context.Context, req *csi.ListSnapshotsRequest) (*csi.ListSnapshotsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "ListSnapshots unsupported")
 }

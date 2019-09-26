@@ -1,0 +1,69 @@
+kind: StatefulSet
+apiVersion: apps/v1
+metadata:
+  name: nifcloud-nas-csi-controller
+  namespace: nifcloud-nas-csi-driver
+spec:
+  serviceName: "nifcloud-nas-csi-driver"
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nifcloud-nas-csi-driver
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: nifcloud-nas-csi-driver
+    spec:
+      serviceAccount: nifcloud-nas-csi-controller-sa
+      containers:
+        - name: csi-external-attacher
+          imagePullPolicy: Always
+          image: quay.io/k8scsi/csi-attacher:v0.4.2
+          args:
+            - "--v=4"
+            - "--csi-address=/csi/csi.sock"
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+        - name: csi-external-provisioner
+          imagePullPolicy: Always
+          image: quay.io/k8scsi/csi-provisioner:v0.4.2
+          args:
+            - "--v=4"
+            # Remove when https://github.com/kubernetes-csi/external-provisioner/issues/108 is fixed
+            - "--provisioner=nas.csi.storage.nifcloud.com"
+            - "--csi-address=/csi/csi.sock"
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+        - name: nifcloud-nas-driver
+          imagePullPolicy: Always
+          image: [image]:[tag]
+          args:
+            - "--v=4"
+            - "--endpoint=unix:/csi/csi.sock"
+            - "--nodeid=$(KUBE_NODE_NAME)"
+            - "--controller=true"
+          env:
+            - name: KUBE_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: cloud-credential
+                  key: accesskey
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: cloud-credential
+                  key: secretkey
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+      volumes:
+        - name: socket-dir
+          emptyDir: {}

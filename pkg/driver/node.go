@@ -41,11 +41,11 @@ var (
 
 // nodeServer handles mounting and unmounting of GCFS volumes on a node
 type nodeServer struct {
-	driver  *GCFSDriver
+	driver  *NifcloudNasDriver
 	mounter mount.Interface
 }
 
-func newNodeServer(driver *GCFSDriver, mounter mount.Interface) csi.NodeServer {
+func newNodeServer(driver *NifcloudNasDriver, mounter mount.Interface) csi.NodeServer {
 	return &nodeServer{
 		driver:  driver,
 		mounter: mounter,
@@ -232,4 +232,14 @@ func (s *nodeServer) unmountPath(targetPath string) error {
 		}
 	}
 	return nil
+}
+
+//// Unimplemented funcs
+
+func (s *nodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "NodeStageVolume unsupported")
+}
+
+func (s *nodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstageVolumeRequest) (*csi.NodeUnstageVolumeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "NodeUnStageVolume unsupported")
 }

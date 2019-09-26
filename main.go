@@ -23,13 +23,14 @@ import (
 	"github.com/golang/glog"
 
 	"k8s.io/kubernetes/pkg/util/mount"
-	"gitlab.devops.nifcloud.net/x_nke/nfcl-nas-csi-driver/pkg/cloud"
-	"gitlab.devops.nifcloud.net/x_nke/nfcl-nas-csi-driver/pkg/driver"
+	"github.com/ryo-watanabe/nfcl-nas-csi-driver/pkg/cloud"
+	"github.com/ryo-watanabe/nfcl-nas-csi-driver/pkg/driver"
 )
 
 var (
 	endpoint      = flag.String("endpoint", "unix:/tmp/csi.sock", "CSI endpoint")
 	nodeID        = flag.String("nodeid", "", "node id")
+	region        = flag.String("region", "jp-east-1", "nifcloud region")
 	runController = flag.Bool("controller", false, "run controller service")
 	runNode       = flag.Bool("node", false, "run node service")
 
@@ -45,7 +46,7 @@ func main() {
 	var provider *cloud.Cloud
 	var err error
 	if *runController {
-		provider, err = cloud.NewCloud()
+		provider, err = cloud.NewCloud(*region)
 		if err != nil {
 			glog.Fatalf("Failed to initialize cloud provider: %v", err)
 		}

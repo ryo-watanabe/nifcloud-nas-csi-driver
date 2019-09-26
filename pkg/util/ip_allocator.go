@@ -18,7 +18,6 @@ package util
 
 import (
 	"fmt"
-	"math"
 	"net"
 	"sync"
 )
@@ -62,7 +61,7 @@ func NewIPAllocator(pendingIPs map[string]bool) *IPAllocator {
 }
 
 // holdIPs adds a particular IP in the pendingIPs set
-func (ipAllocator *IPAllocator) holdIPRange(ip string) {
+func (ipAllocator *IPAllocator) holdIP(ip string) {
 	ipAllocator.pendingIPs[ip] = true
 }
 
@@ -70,7 +69,7 @@ func (ipAllocator *IPAllocator) holdIPRange(ip string) {
 func (ipAllocator *IPAllocator) ReleaseIP(ip string) {
 	ipAllocator.pendingIPsMutex.Lock()
 	defer ipAllocator.pendingIPsMutex.Unlock()
-	delete(ipAllocator.pendingIPs, ipRange)
+	delete(ipAllocator.pendingIPs, ip)
 }
 
 // GetUnreservedIP returns an unreserved IP.
@@ -96,13 +95,13 @@ func (ipAllocator *IPAllocator) GetUnreservedIP(cidr string, cloudInstancesReser
 	for targetIP := cloneIP(ip.Mask(ipnet.Mask)); ipnet.Contains(targetIP) && err == nil; targetIP, err = incrementIP(targetIP, 1) {
 		used := false
 		for reservedIP := range reservedIPs {
-			if targetIP.Equal(reservedIP) {
+			if targetIP.Equal(net.ParseIP(reservedIP)) {
 				used = true
 			}
 		}
 		if !used {
-			ipAllocator.holdIP(targetIP)
-			return targetIP, nil
+			ipAllocator.holdIP(targetIP.String())
+			return targetIP.String(), nil
 		}
 	}
 

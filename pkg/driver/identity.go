@@ -22,10 +22,10 @@ import (
 )
 
 type identityServer struct {
-	driver *GCFSDriver
+	driver *NifcloudNasDriver
 }
 
-func newIdentityServer(driver *GCFSDriver) csi.IdentityServer {
+func newIdentityServer(driver *NifcloudNasDriver) csi.IdentityServer {
 	return &identityServer{driver: driver}
 }
 

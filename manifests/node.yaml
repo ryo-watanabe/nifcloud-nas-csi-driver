@@ -1,0 +1,74 @@
+kind: DaemonSet
+apiVersion: apps/v1
+metadata:
+  name: nifcloud-nas-csi-node
+  namespace: nifcloud-nas-csi-driver
+spec:
+  selector:
+    matchLabels:
+      app: nifcloud-nas-csi-driver
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: nifcloud-nas-csi-driver
+    spec:
+      serviceAccount: nifcloud-nas-csi-node-sa
+      hostNetwork: true
+      containers:
+        - name: csi-driver-registrar
+          imagePullPolicy: Always
+          image: quay.io/k8scsi/driver-registrar:v0.4.2
+          args:
+            - "--v=5"
+            - "--csi-address=/csi/csi.sock"
+            - "--kubelet-registration-path=/var/lib/kubelet/plugins/nas.csi.storage.nifcloud.com/csi.sock"
+          env:
+            - name: KUBE_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          volumeMounts:
+            - name: plugin-dir
+              mountPath: /csi
+            - name: registration-dir
+              mountPath: /registration
+        - name: nifcloud-nas-driver
+          securityContext:
+            privileged: true
+          imagePullPolicy: Always
+          image: [image]:[tag]
+          args:
+            - "--v=5"
+            - "--endpoint=unix:/csi/csi.sock"
+            - "--nodeid=$(KUBE_NODE_NAME)"
+            - "--node=true"
+          env:
+            - name: KUBE_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          volumeMounts:
+            - name: kubelet-dir
+              mountPath: /var/lib/kubelet
+              mountPropagation: "Bidirectional"
+            - name: plugin-dir
+              mountPath: /csi
+        #- name: nfs-services
+        #  imagePullPolicy: Always
+        #  image: gcr.io/gke-release/gcp-filestore-csi-driver:v0.2.0-gke.0
+        #  command: ["/nfs_services_start.sh"]
+      volumes:
+        - name: registration-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins/
+            type: Directory
+        - name: kubelet-dir
+          hostPath:
+            path: /var/lib/kubelet
+            type: Directory
+        - name: plugin-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins/nas.csi.storage.nifcloud.com/
+            type: DirectoryOrCreate
