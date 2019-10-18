@@ -20,7 +20,7 @@ spec:
       containers:
         - name: csi-external-attacher
           imagePullPolicy: Always
-          image: quay.io/k8scsi/csi-attacher:v0.4.2
+          image: quay.io/k8scsi/csi-attacher:v2.0.0
           args:
             - "--v=4"
             - "--csi-address=/csi/csi.sock"
@@ -29,11 +29,9 @@ spec:
               mountPath: /csi
         - name: csi-external-provisioner
           imagePullPolicy: Always
-          image: quay.io/k8scsi/csi-provisioner:v0.4.2
+          image: quay.io/k8scsi/csi-provisioner:v1.4.0
           args:
             - "--v=4"
-            # Remove when https://github.com/kubernetes-csi/external-provisioner/issues/108 is fixed
-            - "--provisioner=nas.csi.storage.nifcloud.com"
             - "--csi-address=/csi/csi.sock"
           volumeMounts:
             - name: socket-dir

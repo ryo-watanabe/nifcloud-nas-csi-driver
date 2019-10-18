@@ -19,11 +19,11 @@ spec:
       containers:
         - name: csi-driver-registrar
           imagePullPolicy: Always
-          image: quay.io/k8scsi/driver-registrar:v0.4.2
+          image: quay.io/k8scsi/driver-registrar:v1.1.0
           args:
             - "--v=5"
             - "--csi-address=/csi/csi.sock"
-            - "--kubelet-registration-path=/var/lib/kubelet/plugins/nas.csi.storage.nifcloud.com/csi.sock"
+            - "--kubelet-registration-path=/var/lib/kubelet/plugins_registry/nas.csi.storage.nifcloud.com/csi.sock"
           env:
             - name: KUBE_NODE_NAME
               valueFrom:
@@ -62,7 +62,7 @@ spec:
       volumes:
         - name: registration-dir
           hostPath:
-            path: /var/lib/kubelet/plugins/
+            path: /var/lib/kubelet/plugins_registry/
             type: Directory
         - name: kubelet-dir
           hostPath:
@@ -70,5 +70,5 @@ spec:
             type: Directory
         - name: plugin-dir
           hostPath:
-            path: /var/lib/kubelet/plugins/nas.csi.storage.nifcloud.com/
+            path: /var/lib/kubelet/plugins_registry/nas.csi.storage.nifcloud.com/
             type: DirectoryOrCreate

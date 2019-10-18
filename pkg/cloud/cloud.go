@@ -13,6 +13,8 @@ import (
 	"github.com/alice02/nifcloud-sdk-go/nifcloud/awserr"
         "github.com/alice02/nifcloud-sdk-go/service/computing"
         "github.com/alice02/nifcloud-sdk-go/service/nas"
+
+	"github.com/ryo-watanabe/nfcl-nas-csi-driver/pkg/util"
 )
 
 type Cloud struct {
@@ -60,7 +62,7 @@ func getAllocatedStorage(capBytes int64, instanceType int64) *int64 {
 		} else {
 			allocatedStorage = int64(i)*100
 		}
-		if allocatedStorage > capBytes {
+		if util.GbToBytes(allocatedStorage) >= capBytes {
 			break
 		}
 	}
@@ -89,6 +91,8 @@ func GenerateNasInstanceInput(name string, capBytes int64, params map[string]str
 			securityGroup = v
 		case "networkid":
 			network = v
+		case "reservedipv4cidr":
+			// must set after
 		default:
 			return nil, fmt.Errorf("invalid parameter %q", k)
 		}
@@ -128,17 +132,17 @@ func IsNotFoundErr(err error) bool {
 
 func CompareNasInstanceWithInput(n *nas.NASInstance, in *nas.CreateNASInstanceInput) error {
 	mismatches := []string{}
-	if n.NASInstanceType != in.NASInstanceType {
+	if n.NASInstanceType == nil || *n.NASInstanceType != *in.NASInstanceType {
 		mismatches = append(mismatches, "NASInstanceType")
 	}
 	allocatedStorage, _ := strconv.ParseInt(*n.AllocatedStorage, 10, 64)
 	if allocatedStorage != *in.AllocatedStorage {
 		mismatches = append(mismatches, "AllocatedStorage")
 	}
-	if n.NetworkId != in.NetworkId {
+	if n.NetworkId == nil || *n.NetworkId != *in.NetworkId {
 		mismatches = append(mismatches, "NetworkId")
 	}
-	if n.AvailabilityZone != in.AvailabilityZone {
+	if n.AvailabilityZone == nil || *n.AvailabilityZone != *in.AvailabilityZone {
 		mismatches = append(mismatches, "AvailabilityZone")
 	}
 	if len(n.NASSecurityGroups) != len(in.NASSecurityGroups) {
@@ -170,6 +174,20 @@ func (c *Cloud) ListNasInstances(ctx context.Context) ([]*nas.NASInstance, error
 func (c *Cloud) CreateNasInstance(ctx context.Context, n *nas.CreateNASInstanceInput) (*nas.NASInstance, error) {
 	// Call create NAS Instances
 	output, err := c.Nas.CreateNASInstanceWithContext(ctx, n)
+
+	if err != nil {
+		return nil, err
+	}
+	return output.NASInstance, nil
+}
+
+func (c *Cloud) ModifyNasInstance(ctx context.Context, name string) (*nas.NASInstance, error) {
+	// Call modify NAS Instance to set NoRootSquash=true
+	no_root_squash := "true"
+	output, err := c.Nas.ModifyNASInstanceWithContext(
+		ctx,
+		&nas.ModifyNASInstanceInput{NASInstanceIdentifier: &name, NoRootSquash: &no_root_squash},
+	)
 
 	if err != nil {
 		return nil, err

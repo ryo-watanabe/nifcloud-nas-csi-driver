@@ -1,3 +1,4 @@
+
 /*
 Copyright 2018 The Kubernetes Authors.
 
@@ -17,15 +18,18 @@ limitations under the License.
 package driver
 
 import (
-	//"fmt"
-	//"strings"
+	"fmt"
+	"time"
 	"strconv"
 
-	csi "github.com/container-storage-interface/spec/lib/go/csi/v0"
+	//csi "github.com/container-storage-interface/spec/lib/go/csi/v0"
+	csi "github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/golang/glog"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	//"github.com/cenkalti/backoff"
+	//"sigs.k8s.io/sig-storage-lib-external-provisioner/controller"
 
 	"github.com/alice02/nifcloud-sdk-go/service/nas"
 
@@ -49,14 +53,6 @@ const (
 	attrVolume = "volume"
 )
 
-// CreateVolume parameters
-const (
-	paramInstanceType = "instance-type"
-	paramZone = "zone"
-	paramNetwork = "network"
-	paramReservedIPv4CIDR = "reserved-ipv4-cidr"
-)
-
 // controllerServer handles volume provisioning
 type controllerServer struct {
 	config *controllerServerConfig
@@ -74,6 +70,10 @@ func newControllerServer(config *controllerServerConfig) csi.ControllerServer {
 	return &controllerServer{config: config}
 }
 
+func retryNotify(err error, wait time.Duration) {
+	glog.V(4).Infof("Retrying after %.2f seconds : %s", wait.Seconds(), err.Error())
+}
+
 // CreateVolume creates a GCFS instance
 func (s *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequest) (*csi.CreateVolumeResponse, error) {
 	glog.V(4).Infof("CreateVolume called with request %v", *req)
@@ -89,7 +89,7 @@ func (s *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 	}
 
 	capBytes := getRequestCapacity(req.GetCapacityRange())
-	glog.V(5).Infof("Using capacity bytes %q for volume %q", capBytes, name)
+	glog.V(4).Infof("Using capacity bytes %q for volume %q", capBytes, name)
 
 	nasInput, err := cloud.GenerateNasInstanceInput(name, capBytes, req.GetParameters())
 	if err != nil {
@@ -106,9 +106,10 @@ func (s *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 		if err = cloud.CompareNasInstanceWithInput(n, nasInput); err != nil {
 			return nil, status.Error(codes.AlreadyExists, err.Error())
 		}
+
 	} else {
 		// If we are creating a new instance, we need pick an unused ip from reserved-ipv4-cidr
-		if reservedIPv4CIDR, ok := req.GetParameters()[paramReservedIPv4CIDR]; ok {
+		if reservedIPv4CIDR, ok := req.GetParameters()["reservedIpv4Cidr"]; ok {
 			reservedIP, err := s.reserveIP(ctx, reservedIPv4CIDR)
 
 			// Possible cases are 1) CreateInstanceAborted, 2)CreateInstance running in background
@@ -118,12 +119,13 @@ func (s *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 			if err != nil {
 				return nil, err
 			}
+			reservedIP = reservedIP + "/24"
 
 			// Adding the reserved IP to the instance input
 			nasInput.MasterPrivateAddress = &reservedIP
 		} else {
 			// If the param was not provided
-			return nil, status.Error(codes.InvalidArgument, paramReservedIPv4CIDR + " must be provided")
+			return nil, status.Error(codes.InvalidArgument, "reservedIpv4Cidr must be provided")
 		}
 
 		// Create the instance
@@ -131,7 +133,52 @@ func (s *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 		if err != nil {
 			return nil, status.Error(codes.Internal, err.Error())
 		}
+
+		/*
+		// do snapshot with backoff retry
+		b := backoff.NewExponentialBackOff()
+		b.MaxElapsedTime = time.Duration(10) * time.Minute
+		b.RandomizationFactor = 0.2
+		b.Multiplier = 1.0
+		b.InitialInterval = 30 * time.Second
+		backoffCtx := context.TODO()
+
+		chkNasInstanceReady := func() error {
+			chkNas, err := s.config.cloud.GetNasInstance(backoffCtx, name)
+			if err != nil {
+				return backoff.Permanent(err)
+			}
+			if *chkNas.NASInstanceStatus == "available" {
+				return nil
+			}
+			return fmt.Errorf("NASInstanceStatus : %s", *chkNas.NASInstanceStatus)
+		}
+		err = backoff.RetryNotify(chkNasInstanceReady, b, retryNotify)
+		if err != nil {
+			return nil, status.Error(codes.Internal, "Error in waiting for NASInstance becomes ready : " + err.Error())
+		}*/
+
 	}
+
+	if *n.NASInstanceStatus != "available" {
+		msg := fmt.Sprintf("NAS Instance %s already exists but not available : %s", name, *n.NASInstanceStatus)
+		glog.V(4).Infof(msg)
+		if *n.NASInstanceStatus == "creating" {
+			// Returning codes.Aborted will let controller to retry.
+			// This causes warning events in PVC. Is there better way to ask controller to retry ?
+			return nil, status.Error(codes.Aborted, msg)
+		} else {
+			// Returning codes.Internal will let controller NOT to retry.
+			return nil, status.Error(codes.Internal, msg)
+		}
+	}
+
+	// Set no_root_squash and get NAS Instance again
+	n, err = s.config.cloud.ModifyNasInstance(ctx, name)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+
 	return &csi.CreateVolumeResponse{Volume: s.nasInstanceToCSIVolume(n)}, nil
 }
 
@@ -207,13 +254,13 @@ func (s *controllerServer) ValidateVolumeCapabilities(ctx context.Context, req *
 	// Note that there is nothing in the instance that we actually need to validate
 	if err := s.config.driver.validateVolumeCapabilities(caps); err != nil {
 		return &csi.ValidateVolumeCapabilitiesResponse{
-			Supported: false,
+			//Supported: false,
 			Message:   err.Error(),
 		}, status.Error(codes.InvalidArgument, err.Error())
 	}
 
 	return &csi.ValidateVolumeCapabilitiesResponse{
-		Supported: true,
+		//Supported: true,
 	}, nil
 }
 
@@ -248,12 +295,16 @@ func getRequestCapacity(capRange *csi.CapacityRange) int64 {
 
 // fileInstanceToCSIVolume generates a CSI volume spec from the cloud Instance
 func (s *controllerServer) nasInstanceToCSIVolume(n *nas.NASInstance) *csi.Volume {
-	capacityBytes, _ := strconv.ParseInt(*n.AllocatedStorage, 10, 64)
+	capacityGBytes, _ := strconv.ParseInt(*n.AllocatedStorage, 10, 64)
+	ip := "0.0.0.0"
+	if n.Endpoint != nil && n.Endpoint.PrivateAddress != nil {
+		ip = *n.Endpoint.PrivateAddress
+	}
 	return &csi.Volume{
-		Id: s.config.cloud.GenerateVolumeIdFromNasInstance(n),
-		CapacityBytes: capacityBytes,
-		Attributes: map[string]string{
-			attrIp: *n.Endpoint.PrivateAddress,
+		VolumeId: s.config.cloud.GenerateVolumeIdFromNasInstance(n),
+		CapacityBytes: util.GbToBytes(capacityGBytes),
+		VolumeContext: map[string]string{
+			attrIp: ip,
 		},
 	}
 }
@@ -290,4 +341,8 @@ func (s *controllerServer) DeleteSnapshot(ctx context.Context, req *csi.DeleteSn
 
 func (s *controllerServer) ListSnapshots(ctx context.Context, req *csi.ListSnapshotsRequest) (*csi.ListSnapshotsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "ListSnapshots unsupported")
+}
+
+func (s *controllerServer) ControllerExpandVolume(ctx context.Context, req *csi.ControllerExpandVolumeRequest) (*csi.ControllerExpandVolumeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "ControllerExpandVolume unsupported")
 }

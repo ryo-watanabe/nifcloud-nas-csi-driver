@@ -1,0 +1,11 @@
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: test-pvc
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: csi-nifcloud-nas-std
+  resources:
+    requests:
+      storage: 100Gi

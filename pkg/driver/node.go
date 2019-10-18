@@ -21,7 +21,8 @@ import (
 	"os"
 	"runtime"
 
-	csi "github.com/container-storage-interface/spec/lib/go/csi/v0"
+	//csi "github.com/container-storage-interface/spec/lib/go/csi/v0"
+	csi "github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/golang/glog"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc/codes"
@@ -69,7 +70,7 @@ func (s *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublish
 	}
 
 	// Validate volume attributes
-	attr := req.GetVolumeAttributes()
+	attr := req.GetVolumeContext()
 	if err := validateVolumeAttributes(attr); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
@@ -94,7 +95,8 @@ func (s *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublish
 	}
 
 	// Mount source
-	source := fmt.Sprintf("%s:/%s", attr[attrIp], attr[attrVolume])
+	//source := fmt.Sprintf("%s:/%s", attr[attrIp], attr[attrVolume])
+	source := fmt.Sprintf("%s:/", attr[attrIp])
 
 	// FileSystem type
 	fstype := "nfs"
@@ -102,7 +104,7 @@ func (s *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublish
 	// Mount options
 	options := []string{}
 
-	// Windows specific values
+	/*// Windows specific values
 	if goOs == "windows" {
 		source = fmt.Sprintf("\\\\%s\\%s", attr[attrIp], attr[attrVolume])
 		fstype = "cifs"
@@ -116,7 +118,7 @@ func (s *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublish
 
 		options = append(options, secrets[optionSmbUser])
 		options = append(options, secrets[optionSmbPassword])
-	}
+	}*/
 
 	if readOnly {
 		options = append(options, "ro")
@@ -155,11 +157,13 @@ func (s *nodeServer) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpub
 	return &csi.NodeUnpublishVolumeResponse{}, nil
 }
 
+/*
 func (s *nodeServer) NodeGetId(ctx context.Context, req *csi.NodeGetIdRequest) (*csi.NodeGetIdResponse, error) {
 	return &csi.NodeGetIdResponse{
 		NodeId: s.driver.config.NodeID,
 	}, nil
 }
+*/
 
 func (s *nodeServer) NodeGetInfo(ctx context.Context, req *csi.NodeGetInfoRequest) (*csi.NodeGetInfoResponse, error) {
 	return &csi.NodeGetInfoResponse{
@@ -180,9 +184,9 @@ func validateVolumeAttributes(attr map[string]string) error {
 		return fmt.Errorf("volume attribute %v not set", attrIp)
 	}
 	// TODO: validate allowed characters
-	if attr[attrVolume] == "" {
-		return fmt.Errorf("volume attribute %v not set", attrVolume)
-	}
+	//if attr[attrVolume] == "" {
+	//	return fmt.Errorf("volume attribute %v not set", attrVolume)
+	//}
 	return nil
 }
 
@@ -242,4 +246,12 @@ func (s *nodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolu
 
 func (s *nodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstageVolumeRequest) (*csi.NodeUnstageVolumeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "NodeUnStageVolume unsupported")
+}
+
+func (s *nodeServer) NodeExpandVolume(ctx context.Context, req *csi.NodeExpandVolumeRequest) (*csi.NodeExpandVolumeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "NodeExpandVolume unsupported")
+}
+
+func (s *nodeServer) NodeGetVolumeStats(ctx context.Context, req *csi.NodeGetVolumeStatsRequest) (*csi.NodeGetVolumeStatsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "NodeGetVolumeStats unsupported")
 }

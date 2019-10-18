@@ -19,7 +19,8 @@ package driver
 import (
 	"fmt"
 
-	csi "github.com/container-storage-interface/spec/lib/go/csi/v0"
+	//csi "github.com/container-storage-interface/spec/lib/go/csi/v0"
+	csi "github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/golang/glog"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
