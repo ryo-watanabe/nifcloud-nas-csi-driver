@@ -19,7 +19,9 @@ package driver
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"runtime"
+	"strings"
 
 	//csi "github.com/container-storage-interface/spec/lib/go/csi/v0"
 	csi "github.com/container-storage-interface/spec/lib/go/csi"
@@ -28,6 +30,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"k8s.io/kubernetes/pkg/util/mount"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 const (
@@ -40,17 +43,49 @@ var (
 	goOs = runtime.GOOS
 )
 
+func registerNodePrivateIp(config *NifcloudNasDriverConfig) error {
+	// Get private IP (if:ens192)
+	privateIp, err := exec.Command("sh", "-c", "ip -4 a show ens192 | grep inet | tr -s ' ' | cut -d' ' -f3").Output()
+	if err != nil {
+		return err
+	}
+	glog.Infof("Node private IP : %s", privateIp)
+
+	// Annotate private ip in csinode resource
+	csiNode, err := config.KubeClient.StorageV1beta1().CSINodes().Get(config.NodeID, metav1.GetOptions{})
+	if err != nil {
+		return err
+	}
+	glog.Infof("CSNode spec : %v", csiNode.Spec)
+	annotations := csiNode.ObjectMeta.GetAnnotations()
+	if annotations == nil {
+		annotations = make(map[string]string, 0)
+	}
+	annotations[config.Name + "/privateIp"] = strings.Split(string(privateIp), "/")[0]
+	csiNode.ObjectMeta.SetAnnotations(annotations)
+	csiNode, err = config.KubeClient.StorageV1beta1().CSINodes().Update(csiNode)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 // nodeServer handles mounting and unmounting of GCFS volumes on a node
 type nodeServer struct {
 	driver  *NifcloudNasDriver
 	mounter mount.Interface
 }
 
-func newNodeServer(driver *NifcloudNasDriver, mounter mount.Interface) csi.NodeServer {
+func newNodeServer(driver *NifcloudNasDriver, mounter mount.Interface) (csi.NodeServer, error) {
+	err := registerNodePrivateIp(driver.config)
+	if err != nil {
+		return nil, err
+	}
 	return &nodeServer{
 		driver:  driver,
 		mounter: mounter,
-	}
+	}, nil
 }
 
 // NodePublishVolume mounts the GCFS volume

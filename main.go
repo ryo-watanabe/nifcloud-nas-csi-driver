@@ -21,7 +21,8 @@ import (
 	"os"
 
 	"github.com/golang/glog"
-
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/kubernetes/pkg/util/mount"
 	"github.com/ryo-watanabe/nfcl-nas-csi-driver/pkg/cloud"
 	"github.com/ryo-watanabe/nfcl-nas-csi-driver/pkg/driver"
@@ -43,8 +44,16 @@ func main() {
 	flag.Set("logtostderr", "true")
 	flag.Parse()
 
+	cfg, err := clientcmd.BuildConfigFromFlags("", "")
+	if err != nil {
+		glog.Fatalf("Error building kubeconfig: %s", err.Error())
+	}
+	kubeClient, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		glog.Fatalf("Error building kubernetes clientset: %s", err.Error())
+	}
+
 	var provider *cloud.Cloud
-	var err error
 	if *runController {
 		provider, err = cloud.NewCloud(*region)
 		if err != nil {
@@ -60,6 +69,7 @@ func main() {
 		RunNode:       *runNode,
 		Mounter:       mounter,
 		Cloud:         provider,
+		KubeClient:    kubeClient,
 	}
 
 	nfnsDriver, err := driver.NewNifcloudNasDriver(config)

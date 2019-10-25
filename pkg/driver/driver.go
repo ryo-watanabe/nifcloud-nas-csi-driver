@@ -18,6 +18,7 @@ package driver
 
 import (
 	"fmt"
+	"time"
 
 	//csi "github.com/container-storage-interface/spec/lib/go/csi/v0"
 	csi "github.com/container-storage-interface/spec/lib/go/csi"
@@ -25,6 +26,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"k8s.io/kubernetes/pkg/util/mount"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/apimachinery/pkg/util/wait"
 
 	"github.com/ryo-watanabe/nfcl-nas-csi-driver/pkg/cloud"
 )
@@ -37,6 +40,7 @@ type NifcloudNasDriverConfig struct {
 	RunNode       bool            // Run CSI node service
 	Mounter       mount.Interface // Mount library
 	Cloud         *cloud.Cloud    // Cloud provider
+	KubeClient    kubernetes.Interface  // k8s client
 }
 
 type NifcloudNasDriver struct {
@@ -83,8 +87,12 @@ func NewNifcloudNasDriver(config *NifcloudNasDriverConfig) (*NifcloudNasDriver, 
 
 	// Setup RPC servers
 	driver.ids = newIdentityServer(driver)
+	var err error
 	if config.RunNode {
-		driver.ns = newNodeServer(driver, config.Mounter)
+		driver.ns, err = newNodeServer(driver, config.Mounter)
+		if err != nil {
+			return nil, fmt.Errorf("error occured registering private IP: %s", err.Error())
+		}
 	}
 	if config.RunController {
 		csc := []csi.ControllerServiceCapability_RPC_Type{
@@ -195,6 +203,14 @@ func (driver *NifcloudNasDriver) Run(endpoint string) {
 	//Start the nonblocking GRPC
 	s := NewNonBlockingGRPCServer()
 	s.Start(endpoint, driver.ids, driver.cs, driver.ns)
+
+	// Start NAS Security Group Sync
+	if driver.cs != nil {
+		syncer := newNSGSyncer(driver)
+		go wait.Forever(syncer.runNSGSyncer, time.Duration(syncer.SyncPeriod) * time.Second)
+	}
+
+	// Block app : TODO : signal handlings necessary for gracefull stopping.
 	s.Wait()
 }
 
