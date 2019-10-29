@@ -56,7 +56,7 @@ func registerNodePrivateIp(config *NifcloudNasDriverConfig) error {
 	if err != nil {
 		return err
 	}
-	glog.Infof("CSNode spec : %v", csiNode.Spec)
+	glog.Infof("CSINode spec : %v", csiNode.Spec)
 	annotations := csiNode.ObjectMeta.GetAnnotations()
 	if annotations == nil {
 		annotations = make(map[string]string, 0)
@@ -78,10 +78,10 @@ type nodeServer struct {
 }
 
 func newNodeServer(driver *NifcloudNasDriver, mounter mount.Interface) (csi.NodeServer, error) {
-	err := registerNodePrivateIp(driver.config)
-	if err != nil {
-		return nil, err
-	}
+	//err := registerNodePrivateIp(driver.config)
+	//if err != nil {
+	//	return nil, err
+	//}
 	return &nodeServer{
 		driver:  driver,
 		mounter: mounter,

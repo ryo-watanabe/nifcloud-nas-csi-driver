@@ -23,7 +23,7 @@ spec:
           args:
             - "--v=5"
             - "--csi-address=/csi/csi.sock"
-            - "--kubelet-registration-path=/var/lib/kubelet/plugins_registry/nas.csi.storage.nifcloud.com/csi.sock"
+            - "--kubelet-registration-path=/var/lib/kubelet/plugins/nas.csi.storage.nifcloud.com/csi.sock"
           env:
             - name: KUBE_NODE_NAME
               valueFrom:
@@ -70,5 +70,5 @@ spec:
             type: Directory
         - name: plugin-dir
           hostPath:
-            path: /var/lib/kubelet/plugins_registry/nas.csi.storage.nifcloud.com/
+            path: /var/lib/kubelet/plugins/nas.csi.storage.nifcloud.com/
             type: DirectoryOrCreate

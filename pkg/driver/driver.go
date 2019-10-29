@@ -28,6 +28,7 @@ import (
 	"k8s.io/kubernetes/pkg/util/mount"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"github.com/cenkalti/backoff"
 
 	"github.com/ryo-watanabe/nfcl-nas-csi-driver/pkg/cloud"
 )
@@ -197,6 +198,10 @@ func (driver *NifcloudNasDriver) ValidateControllerServiceRequest(c csi.Controll
 	return status.Error(codes.InvalidArgument, "Invalid controller service request")
 }
 
+func retryNotify(err error, wait time.Duration) {
+	glog.Infof("Retrying after %.2f seconds : %s", wait.Seconds(), err.Error())
+}
+
 func (driver *NifcloudNasDriver) Run(endpoint string) {
 	glog.Infof("Running driver: %v", driver.config.Name)
 
@@ -208,6 +213,22 @@ func (driver *NifcloudNasDriver) Run(endpoint string) {
 	if driver.cs != nil {
 		syncer := newNSGSyncer(driver)
 		go wait.Forever(syncer.runNSGSyncer, time.Duration(syncer.SyncPeriod) * time.Second)
+	}
+
+	// Register node private IP
+	if driver.ns != nil {
+		b := backoff.NewExponentialBackOff()
+		b.MaxElapsedTime = time.Duration(60) * time.Second
+		b.RandomizationFactor = 0.2
+		b.Multiplier = 1.0
+		b.InitialInterval = 10 * time.Second
+		registerNodePrivateIpFunc := func() error {
+			return registerNodePrivateIp(driver.config)
+		}
+		err := backoff.RetryNotify(registerNodePrivateIpFunc, b, retryNotify)
+		if err != nil {
+			glog.Errorf("Error in registering node private IP: " + err.Error())
+		}
 	}
 
 	// Block app : TODO : signal handlings necessary for gracefull stopping.

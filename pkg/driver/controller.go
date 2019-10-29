@@ -22,6 +22,7 @@ import (
 	"time"
 	"strconv"
 	"reflect"
+	"strings"
 
 	//csi "github.com/container-storage-interface/spec/lib/go/csi/v0"
 	csi "github.com/container-storage-interface/spec/lib/go/csi"
@@ -31,7 +32,7 @@ import (
 	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/util/runtime"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	//"github.com/cenkalti/backoff"
+	"github.com/cenkalti/backoff"
 	//"sigs.k8s.io/sig-storage-lib-external-provisioner/controller"
 
 	"github.com/alice02/nifcloud-sdk-go-v2/service/nas"
@@ -242,7 +243,7 @@ func (s *NSGSyncer) SyncNasSecurityGroups() error {
 				if err != nil {
 					return fmt.Errorf("Error revoking NASSecurityGroup ingress: %s", err.Error())
 				}
-				glog.V(4).Infof("CIDRIP %s revoked in SecurityGroup %s", aip.String(), *scInput.NASSecurityGroupName)
+				glog.V(4).Infof("CIDRIP %s revoked in SecurityGroup %s", *aip.CIDRIP, *scInput.NASSecurityGroupName)
 				// Do one task only to wait recovery of Client.Resource.IncorrectState.ApplyNASSecurityGroup.
 				return nil
 			}
@@ -255,9 +256,35 @@ func (s *NSGSyncer) SyncNasSecurityGroups() error {
 	return nil
 }
 
+// Get reserved CIDRIP from PVC's annotations
+func (s *controllerServer) getIpv4CiderFromPVC(name string) (string, error) {
+	kubeClient := s.config.driver.config.KubeClient
+	pvcUIDs := strings.SplitN(name, "-", 2)
+	if len(pvcUIDs) < 2 {
+		return "", fmt.Errorf("Error getting IP from PVC : Cannot split UID")
+	}
+	pvcs, err := kubeClient.CoreV1().PersistentVolumeClaims("").List(metav1.ListOptions{})
+	if err != nil {
+		return "", fmt.Errorf("Error getting PVC list : %s", err.Error())
+	}
+	for _, pvc := range pvcs.Items {
+		if string(pvc.ObjectMeta.GetUID()) == pvcUIDs[1] {
+			if cidrip, ok := pvc.ObjectMeta.GetAnnotations()[s.config.driver.config.Name + "/reservedIPv4Cidr"]; ok {
+				if !strings.Contains(cidrip, "/") {
+					cidrip = cidrip + "/32"
+				}
+				return cidrip, nil
+			}
+			// PVC without annotation is acceptable
+			return "", nil
+		}
+	}
+	return "", fmt.Errorf("Error PVC %s not found", pvcUIDs[1])
+}
+
 // CreateVolume creates a GCFS instance
 func (s *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequest) (*csi.CreateVolumeResponse, error) {
-	glog.V(4).Infof("CreateVolume called with request %v", *req)
+	glog.V(5).Infof("CreateVolume called with request %v", *req)
 
 	// Validate arguments
 	name := req.GetName()
@@ -270,7 +297,7 @@ func (s *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 	}
 
 	capBytes := getRequestCapacity(req.GetCapacityRange())
-	glog.V(4).Infof("Using capacity bytes %q for volume %q", capBytes, name)
+	glog.V(5).Infof("Using capacity bytes %q for volume %q", capBytes, name)
 
 	nasInput, err := cloud.GenerateNasInstanceInput(name, capBytes, req.GetParameters())
 	if err != nil {
@@ -290,33 +317,41 @@ func (s *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 
 	} else {
 		// If we are creating a new instance, we need pick an unused ip from reserved-ipv4-cidr
-		if reservedIPv4CIDR, ok := req.GetParameters()["reservedIpv4Cidr"]; ok {
-			reservedIP, err := s.reserveIP(ctx, reservedIPv4CIDR)
-
-			// Possible cases are 1) CreateInstanceAborted, 2)CreateInstance running in background
-			// The ListInstances response will contain the reservedIPs if the operation was started
-			// In case of abort, the IP is released and available for reservation
-			defer s.config.ipAllocator.ReleaseIP(reservedIP)
-			if err != nil {
-				return nil, err
-			}
-			reservedIP = reservedIP + "/24"
-
-			// Adding the reserved IP to the instance input
-			nasInput.MasterPrivateAddress = &reservedIP
-		} else {
-			// If the param was not provided
-			return nil, status.Error(codes.InvalidArgument, "reservedIpv4Cidr must be provided")
+		reservedIPv4CIDR, err := s.getIpv4CiderFromPVC(name)
+		if err != nil {
+			return nil, status.Error(codes.InvalidArgument, "volume name invalid")
 		}
+		if reservedIPv4CIDR == "" {
+			reservedIPv4CIDR = req.GetParameters()["reservedIpv4Cidr"]
+			if reservedIPv4CIDR == "" {
+				return nil, status.Error(codes.InvalidArgument, "reservedIpv4Cidr must be provided")
+			}
+			glog.V(4).Infof("Using reserved IPv4 CIDR of storage class : %s", reservedIPv4CIDR)
+		} else {
+			glog.V(4).Infof("Using reserved IPv4 CIDR of PVC : %s", reservedIPv4CIDR)
+		}
+		reservedIP, err := s.reserveIP(ctx, reservedIPv4CIDR)
+
+		// Possible cases are 1) CreateInstanceAborted, 2)CreateInstance running in background
+		// The ListInstances response will contain the reservedIPs if the operation was started
+		// In case of abort, the IP is released and available for reservation
+		defer s.config.ipAllocator.ReleaseIP(reservedIP)
+		if err != nil {
+			return nil, err
+		}
+		reservedIP = reservedIP + "/24"
+
+		// Adding the reserved IP to the instance input
+		nasInput.MasterPrivateAddress = &reservedIP
 
 		// Create the instance
+		glog.V(4).Infof("Create NAS Instance called with input %v", nasInput)
 		n, err = s.config.cloud.CreateNasInstance(ctx, nasInput)
 		if err != nil {
 			return nil, status.Error(codes.Internal, err.Error())
 		}
 
-		/*
-		// do snapshot with backoff retry
+		// wait for NAS available with backoff retry
 		b := backoff.NewExponentialBackOff()
 		b.MaxElapsedTime = time.Duration(10) * time.Minute
 		b.RandomizationFactor = 0.2
@@ -324,26 +359,34 @@ func (s *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 		b.InitialInterval = 30 * time.Second
 		backoffCtx := context.TODO()
 
-		chkNasInstanceReady := func() error {
+		chkNasInstanceAvailable := func() error {
 			chkNas, err := s.config.cloud.GetNasInstance(backoffCtx, name)
 			if err != nil {
 				return backoff.Permanent(err)
 			}
 			if *chkNas.NASInstanceStatus == "available" {
 				return nil
+			} else if *chkNas.NASInstanceStatus != "creating" {
+				return backoff.Permanent(fmt.Errorf("NASInstance %s status: %s", name, *chkNas.NASInstanceStatus))
 			}
-			return fmt.Errorf("NASInstanceStatus : %s", *chkNas.NASInstanceStatus)
+			return fmt.Errorf("NASInstance %s status: %s", name, *chkNas.NASInstanceStatus)
 		}
-		err = backoff.RetryNotify(chkNasInstanceReady, b, retryNotify)
+		err = backoff.RetryNotify(chkNasInstanceAvailable, b, retryNotify)
 		if err != nil {
-			return nil, status.Error(codes.Internal, "Error in waiting for NASInstance becomes ready : " + err.Error())
-		}*/
+			return nil, status.Error(codes.Internal, "Error waiting for NASInstance becomes available: " + err.Error())
+		}
+
+		// Set no_root_squash and get NAS Instance again
+		n, err = s.config.cloud.ModifyNasInstance(backoffCtx, name)
+		if err != nil {
+			return nil, status.Error(codes.Internal, err.Error())
+		}
 
 	}
 
 	if *n.NASInstanceStatus != "available" {
-		msg := fmt.Sprintf("NAS Instance %s already exists but not available : %s", name, *n.NASInstanceStatus)
-		glog.V(4).Infof(msg)
+		msg := fmt.Sprintf("NAS Instance %s already exists: status:%s", name, *n.NASInstanceStatus)
+		glog.V(5).Infof(msg)
 		if *n.NASInstanceStatus == "creating" {
 			// Returning codes.Aborted will let controller to retry.
 			// This causes warning events in PVC. Is there better way to ask controller to retry ?
@@ -352,12 +395,6 @@ func (s *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 			// Returning codes.Internal will let controller NOT to retry.
 			return nil, status.Error(codes.Internal, msg)
 		}
-	}
-
-	// Set no_root_squash and get NAS Instance again
-	n, err = s.config.cloud.ModifyNasInstance(ctx, name)
-	if err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
 	}
 
 	return &csi.CreateVolumeResponse{Volume: s.nasInstanceToCSIVolume(n)}, nil
