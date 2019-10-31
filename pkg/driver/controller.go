@@ -23,6 +23,8 @@ import (
 	"strconv"
 	"reflect"
 	"strings"
+	"os"
+	"path/filepath"
 
 	//csi "github.com/container-storage-interface/spec/lib/go/csi/v0"
 	csi "github.com/container-storage-interface/spec/lib/go/csi"
@@ -32,6 +34,7 @@ import (
 	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/util/runtime"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/kubernetes/pkg/util/mount"
 	"github.com/cenkalti/backoff"
 	//"sigs.k8s.io/sig-storage-lib-external-provisioner/controller"
 
@@ -53,8 +56,8 @@ const (
 
 // Volume attributes
 const (
-	attrIp     = "ip"
-	attrVolume = "volume"
+	attrIp         = "ip"
+	attrSourcePath = "path"
 )
 
 // controllerServer handles volume provisioning
@@ -282,9 +285,46 @@ func (s *controllerServer) getIpv4CiderFromPVC(name string) (string, error) {
 	return "", fmt.Errorf("Error PVC %s not found", pvcUIDs[1])
 }
 
+// Get namespace UID
+func (s *controllerServer) getNamespaceUID(name string) (string, error) {
+	kubeClient := s.config.driver.config.KubeClient
+	ns, err := kubeClient.CoreV1().Namespaces().Get(name, metav1.GetOptions{})
+	if err != nil {
+		return "", fmt.Errorf("Error getting namespace : %s", err.Error())
+	}
+	return string(ns.ObjectMeta.GetUID()), nil
+}
+
+// Convert CreateVolumeRequest into shared
+func (s *controllerServer) convertSharedRequest(name string, req *csi.CreateVolumeRequest) (string, int64, error) {
+	if req.GetParameters()["shared"] != "true" {
+		return name, getRequestCapacity(req.GetCapacityRange(), minVolumeSize), nil
+	}
+	capBytes := getRequestCapacityNoMinimum(req.GetCapacityRange())
+	sharedCapGiBytes, err := strconv.ParseInt(req.GetParameters()["capacityParInstanceGiB"], 10, 64)
+	if err != nil {
+		return "", 0, fmt.Errorf("Invalid value in capacityParInstanceGiB: %s", err.Error())
+	}
+	sharedCapBytes := util.GbToBytes(sharedCapGiBytes)
+
+	// TODO: must be check with sum of all shared PVs capacities
+	if capBytes > sharedCapBytes {
+		return "", 0, fmt.Errorf("Request capacity %d is too big to share a NAS instance.", capBytes)
+	}
+
+	// Get kube-system UID for cluster ID
+	clusterUID, err := s.getNamespaceUID("kube-system")
+	if err != nil {
+		return "", 0, fmt.Errorf("Error getting namespace UID: %S", err.Error())
+	}
+	sharedName := "cluster-" + clusterUID + "-shared-" +  req.GetParameters()["instanceType"] + "001"
+
+	return sharedName, sharedCapBytes, nil
+}
+
 // CreateVolume creates a GCFS instance
 func (s *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequest) (*csi.CreateVolumeResponse, error) {
-	glog.V(5).Infof("CreateVolume called with request %v", *req)
+	glog.V(4).Infof("CreateVolume called with request %v", *req)
 
 	// Validate arguments
 	name := req.GetName()
@@ -296,7 +336,11 @@ func (s *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
-	capBytes := getRequestCapacity(req.GetCapacityRange())
+	name, capBytes, err := s.convertSharedRequest(name, req)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+
 	glog.V(5).Infof("Using capacity bytes %q for volume %q", capBytes, name)
 
 	nasInput, err := cloud.GenerateNasInstanceInput(name, capBytes, req.GetParameters())
@@ -317,7 +361,7 @@ func (s *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 
 	} else {
 		// If we are creating a new instance, we need pick an unused ip from reserved-ipv4-cidr
-		reservedIPv4CIDR, err := s.getIpv4CiderFromPVC(name)
+		reservedIPv4CIDR, err := s.getIpv4CiderFromPVC(req.GetName())
 		if err != nil {
 			return nil, status.Error(codes.InvalidArgument, "volume name invalid")
 		}
@@ -353,7 +397,7 @@ func (s *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 
 		// wait for NAS available with backoff retry
 		b := backoff.NewExponentialBackOff()
-		b.MaxElapsedTime = time.Duration(10) * time.Minute
+		b.MaxElapsedTime = time.Duration(30) * time.Minute
 		b.RandomizationFactor = 0.2
 		b.Multiplier = 1.0
 		b.InitialInterval = 30 * time.Second
@@ -366,14 +410,14 @@ func (s *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 			}
 			if *chkNas.NASInstanceStatus == "available" {
 				return nil
-			} else if *chkNas.NASInstanceStatus != "creating" {
+			} else if *chkNas.NASInstanceStatus != "creating" && *chkNas.NASInstanceStatus != "modifying" {
 				return backoff.Permanent(fmt.Errorf("NASInstance %s status: %s", name, *chkNas.NASInstanceStatus))
 			}
 			return fmt.Errorf("NASInstance %s status: %s", name, *chkNas.NASInstanceStatus)
 		}
 		err = backoff.RetryNotify(chkNasInstanceAvailable, b, retryNotify)
 		if err != nil {
-			return nil, status.Error(codes.Internal, "Error waiting for NASInstance becomes available: " + err.Error())
+			return nil, status.Error(codes.Internal, "Error waiting for NASInstance creating > available: " + err.Error())
 		}
 
 		// Set no_root_squash and get NAS Instance again
@@ -382,12 +426,18 @@ func (s *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 			return nil, status.Error(codes.Internal, err.Error())
 		}
 
+		// Wait for modifying -> available again
+		b.Reset()
+		err = backoff.RetryNotify(chkNasInstanceAvailable, b, retryNotify)
+		if err != nil {
+			return nil, status.Error(codes.Internal, "Error waiting for NASInstance modifying > available: " + err.Error())
+		}
 	}
 
 	if *n.NASInstanceStatus != "available" {
 		msg := fmt.Sprintf("NAS Instance %s already exists: status:%s", name, *n.NASInstanceStatus)
 		glog.V(5).Infof(msg)
-		if *n.NASInstanceStatus == "creating" {
+		if *n.NASInstanceStatus == "creating" || *n.NASInstanceStatus == "modifying" {
 			// Returning codes.Aborted will let controller to retry.
 			// This causes warning events in PVC. Is there better way to ask controller to retry ?
 			return nil, status.Error(codes.Aborted, msg)
@@ -397,7 +447,17 @@ func (s *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 		}
 	}
 
-	return &csi.CreateVolumeResponse{Volume: s.nasInstanceToCSIVolume(n)}, nil
+	// Make source path for shared NAS instance
+	if req.GetParameters()["shared"] == "true" {
+		err = makeSourcePath(getNasInstancePrivateIP(n), *n.NASInstanceIdentifier, req.GetName())
+		if err != nil {
+			return nil, status.Error(codes.Internal, "error making source path for shared NASInstance:" + err.Error())
+		}
+	}
+
+	vol := s.nasInstanceToCSIVolume(n, req)
+	glog.V(4).Infof("Volume created: %v", vol)
+	return &csi.CreateVolumeResponse{Volume: vol}, nil
 }
 
 // reserveIPRange returns the available IP in the cidr
@@ -435,10 +495,31 @@ func (s *controllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVolu
 	if volumeId == "" {
 		return nil, status.Error(codes.InvalidArgument, "volume id is empty")
 	}
+
+	// Is shared
+	shared := false
+	sourcePath := ""
+	tokens := strings.Split(volumeId, "/")
+	if len(tokens) == 3 {
+		volumeId = strings.Join(tokens[0:2], "/")
+		sourcePath = tokens[2]
+		shared = true
+	}
+
 	nas, err := s.config.cloud.GetNasInstanceFromVolumeId(ctx, volumeId)
 	if err != nil {
 		// An invalid ID should be treated as doesn't exist
 		glog.V(5).Infof("failed to get instance for volume %v deletion: %v", volumeId, err)
+		return &csi.DeleteVolumeResponse{}, nil
+	}
+
+	if shared {
+		err := removeSourcePath(getNasInstancePrivateIP(nas), *nas.NASInstanceIdentifier, sourcePath)
+		if err != nil {
+			return nil, status.Error(codes.Internal, "removing source path:" + err.Error())
+		}
+
+		// TODO: check if any other PVs in this instance. Must delete if no PVs found.
 		return &csi.DeleteVolumeResponse{}, nil
 	}
 
@@ -489,9 +570,9 @@ func (s *controllerServer) ControllerGetCapabilities(ctx context.Context, req *c
 }
 
 // getRequestCapacity returns the volume size that should be provisioned
-func getRequestCapacity(capRange *csi.CapacityRange) int64 {
+func getRequestCapacity(capRange *csi.CapacityRange, min int64) int64 {
 	if capRange == nil {
-		return minVolumeSize
+		return min
 	}
 
 	rCap := capRange.GetRequiredBytes()
@@ -503,27 +584,109 @@ func getRequestCapacity(capRange *csi.CapacityRange) int64 {
 			return lCap
 		} else {
 			// request set, round up to min
-			return util.Min(util.Max(rCap, minVolumeSize), lCap)
+			return util.Min(util.Max(rCap, min), lCap)
 		}
 	}
 
 	// limit not set
-	return util.Max(rCap, minVolumeSize)
+	return util.Max(rCap, min)
 }
 
-// fileInstanceToCSIVolume generates a CSI volume spec from the cloud Instance
-func (s *controllerServer) nasInstanceToCSIVolume(n *nas.NASInstance) *csi.Volume {
-	capacityGBytes, _ := strconv.ParseInt(*n.AllocatedStorage, 10, 64)
+// getRequestCapacity returns the volume size that should be provisioned
+func getRequestCapacityNoMinimum(capRange *csi.CapacityRange) int64 {
+	return getRequestCapacity(capRange, 0)
+}
+
+// Mount and mkdir/rmdir for shared volumes
+func opSourcePath(ip, nasName, sourcePath string, remove bool) error {
+
+	// Mount point
+	mountPoint := filepath.Join("tmp", nasName)
+	err := os.MkdirAll(mountPoint, 0755)
+	if err != nil {
+		return fmt.Errorf("Error making mount point %s: %s", mountPoint, err.Error())
+	}
+	// Mount
+	mounter := mount.New("")
+	source := fmt.Sprintf("%s:/", ip)
+	fstype := "nfs"
+	options := []string{}
+	err = mounter.Mount(source, mountPoint, fstype, options)
+	if err != nil {
+		return fmt.Errorf("Mount error:", err.Error())
+	}
+	// Operation
+	tmppath := filepath.Join(mountPoint, sourcePath)
+	if remove {
+		// Remove source path
+		err = os.RemoveAll(tmppath)
+		if err != nil {
+			return fmt.Errorf("Error removing source path %s: %s", tmppath, err.Error())
+		}
+	} else {
+		// Make source path
+		err = os.MkdirAll(tmppath, 0755)
+		if err != nil {
+			return fmt.Errorf("Error making source path %s: %s", tmppath, err.Error())
+		}
+	}
+	// Umount
+	err = mounter.Unmount(mountPoint)
+	if err != nil {
+		return fmt.Errorf("Umount error:", err.Error())
+	}
+
+	return nil
+}
+
+func makeSourcePath(ip, nasName, sourcePath string) error {
+	glog.V(5).Infof("Making source path: %s %s %s", ip, nasName, sourcePath)
+	return opSourcePath(ip, nasName, sourcePath, false)
+}
+
+func removeSourcePath(ip, nasName, sourcePath string) error {
+	glog.V(5).Infof("Removing source path: %s %s %s", ip, nasName, sourcePath)
+	return opSourcePath(ip, nasName, sourcePath, true)
+}
+
+func getNasInstancePrivateIP(n *nas.NASInstance) string {
 	ip := "0.0.0.0"
 	if n.Endpoint != nil && n.Endpoint.PrivateAddress != nil {
 		ip = *n.Endpoint.PrivateAddress
 	}
-	return &csi.Volume{
-		VolumeId: s.config.cloud.GenerateVolumeIdFromNasInstance(n),
-		CapacityBytes: util.GbToBytes(capacityGBytes),
-		VolumeContext: map[string]string{
-			attrIp: ip,
-		},
+	return ip
+}
+
+func getnasInstanceCapacityBytes(n *nas.NASInstance) int64 {
+	capacityGBytes, err := strconv.ParseInt(*n.AllocatedStorage, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return util.GbToBytes(capacityGBytes)
+}
+
+// Generates a CSI volume spec from the shared cloud Instance and request
+func (s *controllerServer) nasInstanceToCSIVolume(n *nas.NASInstance, req *csi.CreateVolumeRequest) *csi.Volume {
+	ip := getNasInstancePrivateIP(n)
+	if req.GetParameters()["shared"] == "true" {
+		return &csi.Volume{
+			VolumeId: s.config.cloud.GenerateVolumeIdFromNasInstance(n) + "/" + req.GetName(),
+			CapacityBytes: getRequestCapacityNoMinimum(req.GetCapacityRange()),
+			VolumeContext: map[string]string{
+				attrIp: ip,
+				attrSourcePath: req.GetName(),
+			},
+		}
+	} else {
+		return &csi.Volume{
+			VolumeId: s.config.cloud.GenerateVolumeIdFromNasInstance(n),
+			CapacityBytes: getnasInstanceCapacityBytes(n),
+			VolumeContext: map[string]string{
+				attrIp: ip,
+				attrSourcePath: "",
+			},
+		}
+
 	}
 }
 

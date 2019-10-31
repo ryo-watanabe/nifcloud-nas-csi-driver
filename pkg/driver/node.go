@@ -78,10 +78,6 @@ type nodeServer struct {
 }
 
 func newNodeServer(driver *NifcloudNasDriver, mounter mount.Interface) (csi.NodeServer, error) {
-	//err := registerNodePrivateIp(driver.config)
-	//if err != nil {
-	//	return nil, err
-	//}
 	return &nodeServer{
 		driver:  driver,
 		mounter: mounter,
@@ -130,8 +126,7 @@ func (s *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublish
 	}
 
 	// Mount source
-	//source := fmt.Sprintf("%s:/%s", attr[attrIp], attr[attrVolume])
-	source := fmt.Sprintf("%s:/", attr[attrIp])
+	source := fmt.Sprintf("%s:/%s", attr[attrIp], attr[attrSourcePath])
 
 	// FileSystem type
 	fstype := "nfs"
@@ -219,9 +214,9 @@ func validateVolumeAttributes(attr map[string]string) error {
 		return fmt.Errorf("volume attribute %v not set", attrIp)
 	}
 	// TODO: validate allowed characters
-	//if attr[attrVolume] == "" {
-	//	return fmt.Errorf("volume attribute %v not set", attrVolume)
-	//}
+	if _, ok := attr[attrSourcePath]; !ok {
+		return fmt.Errorf("volume attribute %v not set", attrSourcePath)
+	}
 	return nil
 }
 

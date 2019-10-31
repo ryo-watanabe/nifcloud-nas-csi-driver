@@ -94,20 +94,24 @@ func GenerateNasInstanceInput(name string, capBytes int64, params map[string]str
 	zone := "east-11"
 	network := "default"
 	protocol := "nfs"
+	var err error
 
 	// Validate parameters (case-insensitive).
 	for k, v := range params {
 		switch strings.ToLower(k) {
 		case "instancetype":
-			instanceType, _ = strconv.ParseInt(v, 10, 64)
+			instanceType, err = strconv.ParseInt(v, 10, 64)
+			if err != nil {
+				return nil, fmt.Errorf("invalid parameter %q", k)
+			}
 		case "zone":
 			zone = v
 		case "securitygroup":
 			securityGroup = v
 		case "networkid":
 			network = v
-		case "reservedipv4cidr":
-			// must set after
+		case "reservedipv4cidr", "capacityparinstancegib", "shared":
+			// allowed
 		default:
 			return nil, fmt.Errorf("invalid parameter %q", k)
 		}
