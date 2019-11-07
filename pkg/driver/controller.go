@@ -21,25 +21,17 @@ import (
 	"fmt"
 	"time"
 	"strconv"
-	"reflect"
 	"strings"
-	"os"
-	"path/filepath"
 
-	//csi "github.com/container-storage-interface/spec/lib/go/csi/v0"
 	csi "github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/golang/glog"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"k8s.io/apimachinery/pkg/util/runtime"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/kubernetes/pkg/util/mount"
 	"github.com/cenkalti/backoff"
-	//"sigs.k8s.io/sig-storage-lib-external-provisioner/controller"
 
 	"github.com/alice02/nifcloud-sdk-go-v2/service/nas"
-
 	"github.com/ryo-watanabe/nfcl-nas-csi-driver/pkg/cloud"
 	"github.com/ryo-watanabe/nfcl-nas-csi-driver/pkg/util"
 )
@@ -83,185 +75,9 @@ func retryNotify(err error, wait time.Duration) {
 }
 */
 
-type NSGSyncer struct {
-	driver *NifcloudNasDriver
-	SyncPeriod int64
-	internalChkIntvl int64
-	cloudChkIntvl int64
-	hasTask bool
-	lastNodePrivateIps *map[string]bool
-	lastSecurityGroupInputs *map[string]nas.CreateNASSecurityGroupInput
-}
-
-func newNSGSyncer(driver *NifcloudNasDriver) *NSGSyncer {
-	return &NSGSyncer{
-		driver:  driver,
-		SyncPeriod: 30, // seconds
-		internalChkIntvl: 300, // seconds
-		cloudChkIntvl: 3600, // seconds
-		hasTask: true,
-		lastNodePrivateIps: nil,
-		lastSecurityGroupInputs: nil,
-	}
-}
-
-func (s *NSGSyncer) runNSGSyncer() {
-	err := s.SyncNasSecurityGroups()
-	if err != nil {
-		runtime.HandleError(err)
-	}
-}
-
-// Sync StorageClass resource and NasSecurityGrooup
-func (s *NSGSyncer) SyncNasSecurityGroups() error {
-
-	// Skip some syncs when current tasks seem to be done.
-	p := time.Now().Unix() / s.SyncPeriod
-	doInternalChk := ( p % (s.internalChkIntvl/s.SyncPeriod) == 0 )
-	doCloudChk := ( p % (s.cloudChkIntvl/s.SyncPeriod) == 0 )
-	glog.V(5).Infof("SyncNasSecurityGroups %d internal check:%v cloud check:%v", p, doInternalChk, doCloudChk)
-
-	if !s.hasTask && !doInternalChk && !doCloudChk {
-		return nil
-	}
-
-	glog.V(5).Infof("SyncNasSecurityGroups internal check")
-
-	kubeClient := s.driver.config.KubeClient
-	ctx := context.TODO()
-
-	// Nodes' private IPs
-	csinodes, err := kubeClient.StorageV1beta1().CSINodes().List(metav1.ListOptions{})
-	if err != nil {
-		return fmt.Errorf("Error getting node private IPs: %s", err.Error())
-	}
-	nodePrivateIps := make(map[string]bool, 0)
-	for _, node := range csinodes.Items {
-		annotations := node.ObjectMeta.GetAnnotations()
-		if annotations != nil {
-			privateIp := annotations[s.driver.config.Name + "/privateIp"]
-			if privateIp != "" {
-				nodePrivateIps[privateIp] = true
-			}
-		}
-	}
-	glog.V(5).Infof("nodePrivateIps : %v", nodePrivateIps)
-
-	// NAS Security Groups
-	classes, err := kubeClient.StorageV1().StorageClasses().List(metav1.ListOptions{})
-	if err != nil {
-		return fmt.Errorf("Error getting storage class: %s", err.Error())
-	}
-	securityGroupInputs := make(map[string]nas.CreateNASSecurityGroupInput, 0)
-	for _, class := range classes.Items {
-		if class.Provisioner == s.driver.config.Name {
-			name := class.Parameters["securityGroup"]
-			zone := class.Parameters["zone"]
-			if name != "" && zone != "" {
-				securityGroupInputs[name] = nas.CreateNASSecurityGroupInput{
-					AvailabilityZone: &zone,
-					NASSecurityGroupName: &name,
-				}
-			}
-		}
-	}
-	glog.V(5).Infof("securityGroupInputs : %v", securityGroupInputs)
-
-	// Internal check
-	if s.lastNodePrivateIps != nil && s.lastSecurityGroupInputs != nil {
-		if reflect.DeepEqual(nodePrivateIps, *s.lastNodePrivateIps) &&
-		   reflect.DeepEqual(securityGroupInputs, *s.lastSecurityGroupInputs) {
-			if !s.hasTask && !doCloudChk {
-				return nil
-			}
-		} else {
-			// Nodes or storage classes changed.
-			glog.V(4).Infof("SyncNasSecurityGroups nodes or storage classes changed")
-			s.lastNodePrivateIps = &nodePrivateIps
-			s.lastSecurityGroupInputs = &securityGroupInputs
-			s.hasTask = true
-		}
-	} else {
-		// Nodes or storage classes changed.
-		s.lastNodePrivateIps = &nodePrivateIps
-		s.lastSecurityGroupInputs = &securityGroupInputs
-		s.hasTask = true
-	}
-
-	glog.V(5).Infof("SyncNasSecurityGroups cloud check")
-
-	// Check cloud and synchronize
-	for _, scInput := range securityGroupInputs {
-
-		nsg, err := s.driver.config.Cloud.GetNasSecurityGroup(ctx, *scInput.NASSecurityGroupName)
-
-		// Check if the NAS Security Group exists and create one if not.
-		if err != nil {
-			if cloud.IsNotFoundErr(err) {
-				nsg, err = s.driver.config.Cloud.CreateNasSecurityGroup(ctx, &scInput)
-				if err != nil {
-					return fmt.Errorf("Error creating NASSecurityGroup: %s", err.Error())
-				}
-				glog.V(4).Infof("NAS SecurityGroup %s created", *scInput.NASSecurityGroupName)
-			} else {
-				return fmt.Errorf("Error getting NASSecurityGroup: %s", err.Error())
-			}
-		}
-
-		// Authorize node private ip if not.
-		for ip, _ := range nodePrivateIps {
-			authorized := false
-			iprange := ip + "/32"
-			for _, aip := range nsg.IPRanges {
-				if *aip.CIDRIP == iprange {
-					authorized = true
-					break
-				}
-			}
-			if !authorized {
-				s.hasTask = true
-				_, err = s.driver.config.Cloud.AuthorizeCIDRIP(ctx, *scInput.NASSecurityGroupName, iprange)
-				if err != nil {
-					return fmt.Errorf("Error authorizing NASSecurityGroup ingress: %s", err.Error())
-				}
-				glog.V(4).Infof("CIDRIP %s authorized in SecurityGroup %s", iprange, *scInput.NASSecurityGroupName)
-				// Do one task only to wait recovery of Client.Resource.IncorrectState.ApplyNASSecurityGroup.
-				return nil
-			}
-		}
-
-		// Revoke CIDRIPs not in node private IPs.
-		for _, aip := range nsg.IPRanges {
-			nodeExists := false
-			for ip, _ := range nodePrivateIps {
-				iprange := ip + "/32"
-				if *aip.CIDRIP == iprange {
-					nodeExists = true
-					break
-				}
-			}
-			if !nodeExists {
-				s.hasTask = true
-				_, err = s.driver.config.Cloud.RevokeCIDRIP(ctx, *scInput.NASSecurityGroupName, *aip.CIDRIP)
-				if err != nil {
-					return fmt.Errorf("Error revoking NASSecurityGroup ingress: %s", err.Error())
-				}
-				glog.V(4).Infof("CIDRIP %s revoked in SecurityGroup %s", *aip.CIDRIP, *scInput.NASSecurityGroupName)
-				// Do one task only to wait recovery of Client.Resource.IncorrectState.ApplyNASSecurityGroup.
-				return nil
-			}
-		}
-	}
-
-	// Tasks completed here
-	s.hasTask = false
-
-	return nil
-}
-
 // Get reserved CIDRIP from PVC's annotations
-func (s *controllerServer) getIpv4CiderFromPVC(name string) (string, error) {
-	kubeClient := s.config.driver.config.KubeClient
+func getIpv4CiderFromPVC(name string, driver *NifcloudNasDriver) (string, error) {
+	kubeClient := driver.config.KubeClient
 	pvcUIDs := strings.SplitN(name, "-", 2)
 	if len(pvcUIDs) < 2 {
 		return "", fmt.Errorf("Error getting IP from PVC : Cannot split UID")
@@ -272,7 +88,7 @@ func (s *controllerServer) getIpv4CiderFromPVC(name string) (string, error) {
 	}
 	for _, pvc := range pvcs.Items {
 		if string(pvc.ObjectMeta.GetUID()) == pvcUIDs[1] {
-			if cidrip, ok := pvc.ObjectMeta.GetAnnotations()[s.config.driver.config.Name + "/reservedIPv4Cidr"]; ok {
+			if cidrip, ok := pvc.ObjectMeta.GetAnnotations()[driver.config.Name + "/reservedIPv4Cidr"]; ok {
 				if !strings.Contains(cidrip, "/") {
 					cidrip = cidrip + "/32"
 				}
@@ -283,43 +99,6 @@ func (s *controllerServer) getIpv4CiderFromPVC(name string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("Error PVC %s not found", pvcUIDs[1])
-}
-
-// Get namespace UID
-func (s *controllerServer) getNamespaceUID(name string) (string, error) {
-	kubeClient := s.config.driver.config.KubeClient
-	ns, err := kubeClient.CoreV1().Namespaces().Get(name, metav1.GetOptions{})
-	if err != nil {
-		return "", fmt.Errorf("Error getting namespace : %s", err.Error())
-	}
-	return string(ns.ObjectMeta.GetUID()), nil
-}
-
-// Convert CreateVolumeRequest into shared
-func (s *controllerServer) convertSharedRequest(name string, req *csi.CreateVolumeRequest) (string, int64, error) {
-	if req.GetParameters()["shared"] != "true" {
-		return name, getRequestCapacity(req.GetCapacityRange(), minVolumeSize), nil
-	}
-	capBytes := getRequestCapacityNoMinimum(req.GetCapacityRange())
-	sharedCapGiBytes, err := strconv.ParseInt(req.GetParameters()["capacityParInstanceGiB"], 10, 64)
-	if err != nil {
-		return "", 0, fmt.Errorf("Invalid value in capacityParInstanceGiB: %s", err.Error())
-	}
-	sharedCapBytes := util.GbToBytes(sharedCapGiBytes)
-
-	// TODO: must be check with sum of all shared PVs capacities
-	if capBytes > sharedCapBytes {
-		return "", 0, fmt.Errorf("Request capacity %d is too big to share a NAS instance.", capBytes)
-	}
-
-	// Get kube-system UID for cluster ID
-	clusterUID, err := s.getNamespaceUID("kube-system")
-	if err != nil {
-		return "", 0, fmt.Errorf("Error getting namespace UID: %S", err.Error())
-	}
-	sharedName := "cluster-" + clusterUID + "-shared-" +  req.GetParameters()["instanceType"] + "001"
-
-	return sharedName, sharedCapBytes, nil
 }
 
 // CreateVolume creates a GCFS instance
@@ -336,7 +115,7 @@ func (s *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
-	name, capBytes, err := s.convertSharedRequest(name, req)
+	name, capBytes, err := convertSharedRequest(ctx, name, req, s.config.driver)
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
@@ -361,7 +140,7 @@ func (s *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 
 	} else {
 		// If we are creating a new instance, we need pick an unused ip from reserved-ipv4-cidr
-		reservedIPv4CIDR, err := s.getIpv4CiderFromPVC(req.GetName())
+		reservedIPv4CIDR, err := getIpv4CiderFromPVC(req.GetName(), s.config.driver)
 		if err != nil {
 			return nil, status.Error(codes.InvalidArgument, "volume name invalid")
 		}
@@ -431,6 +210,11 @@ func (s *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 		err = backoff.RetryNotify(chkNasInstanceAvailable, b, retryNotify)
 		if err != nil {
 			return nil, status.Error(codes.Internal, "Error waiting for NASInstance modifying > available: " + err.Error())
+		}
+		// Must update n again
+		n, err = s.config.cloud.GetNasInstance(ctx, name)
+		if err != nil {
+			return nil, status.Error(codes.Internal, err.Error())
 		}
 	}
 
@@ -514,13 +298,20 @@ func (s *controllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVolu
 	}
 
 	if shared {
+		// Remove source path on shared nas
 		err := removeSourcePath(getNasInstancePrivateIP(nas), *nas.NASInstanceIdentifier, sourcePath)
 		if err != nil {
 			return nil, status.Error(codes.Internal, "removing source path:" + err.Error())
 		}
 
-		// TODO: check if any other PVs in this instance. Must delete if no PVs found.
-		return &csi.DeleteVolumeResponse{}, nil
+		// Check if other PVs on the nas
+		reservedBytes, err := getNasInstanceReservedCap(*nas.NASInstanceIdentifier, s.config.driver)
+		if err != nil {
+			return nil, status.Error(codes.Internal, "checking other PVs on the shared nas:" + err.Error())
+		}
+		if reservedBytes > 0 {
+			return &csi.DeleteVolumeResponse{}, nil
+		}
 	}
 
 	err = s.config.cloud.DeleteNasInstance(ctx, *nas.NASInstanceIdentifier)
@@ -597,58 +388,6 @@ func getRequestCapacityNoMinimum(capRange *csi.CapacityRange) int64 {
 	return getRequestCapacity(capRange, 0)
 }
 
-// Mount and mkdir/rmdir for shared volumes
-func opSourcePath(ip, nasName, sourcePath string, remove bool) error {
-
-	// Mount point
-	mountPoint := filepath.Join("tmp", nasName)
-	err := os.MkdirAll(mountPoint, 0755)
-	if err != nil {
-		return fmt.Errorf("Error making mount point %s: %s", mountPoint, err.Error())
-	}
-	// Mount
-	mounter := mount.New("")
-	source := fmt.Sprintf("%s:/", ip)
-	fstype := "nfs"
-	options := []string{}
-	err = mounter.Mount(source, mountPoint, fstype, options)
-	if err != nil {
-		return fmt.Errorf("Mount error:", err.Error())
-	}
-	// Operation
-	tmppath := filepath.Join(mountPoint, sourcePath)
-	if remove {
-		// Remove source path
-		err = os.RemoveAll(tmppath)
-		if err != nil {
-			return fmt.Errorf("Error removing source path %s: %s", tmppath, err.Error())
-		}
-	} else {
-		// Make source path
-		err = os.MkdirAll(tmppath, 0755)
-		if err != nil {
-			return fmt.Errorf("Error making source path %s: %s", tmppath, err.Error())
-		}
-	}
-	// Umount
-	err = mounter.Unmount(mountPoint)
-	if err != nil {
-		return fmt.Errorf("Umount error:", err.Error())
-	}
-
-	return nil
-}
-
-func makeSourcePath(ip, nasName, sourcePath string) error {
-	glog.V(5).Infof("Making source path: %s %s %s", ip, nasName, sourcePath)
-	return opSourcePath(ip, nasName, sourcePath, false)
-}
-
-func removeSourcePath(ip, nasName, sourcePath string) error {
-	glog.V(5).Infof("Removing source path: %s %s %s", ip, nasName, sourcePath)
-	return opSourcePath(ip, nasName, sourcePath, true)
-}
-
 func getNasInstancePrivateIP(n *nas.NASInstance) string {
 	ip := "0.0.0.0"
 	if n.Endpoint != nil && n.Endpoint.PrivateAddress != nil {
@@ -657,7 +396,7 @@ func getNasInstancePrivateIP(n *nas.NASInstance) string {
 	return ip
 }
 
-func getnasInstanceCapacityBytes(n *nas.NASInstance) int64 {
+func getNasInstanceCapacityBytes(n *nas.NASInstance) int64 {
 	capacityGBytes, err := strconv.ParseInt(*n.AllocatedStorage, 10, 64)
 	if err != nil {
 		return 0
@@ -680,7 +419,7 @@ func (s *controllerServer) nasInstanceToCSIVolume(n *nas.NASInstance, req *csi.C
 	} else {
 		return &csi.Volume{
 			VolumeId: s.config.cloud.GenerateVolumeIdFromNasInstance(n),
-			CapacityBytes: getnasInstanceCapacityBytes(n),
+			CapacityBytes: getNasInstanceCapacityBytes(n),
 			VolumeContext: map[string]string{
 				attrIp: ip,
 				attrSourcePath: "",
