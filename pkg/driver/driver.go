@@ -20,8 +20,7 @@ import (
 	"fmt"
 	"time"
 
-	//csi "github.com/container-storage-interface/spec/lib/go/csi/v0"
-	csi "github.com/container-storage-interface/spec/lib/go/csi"
+	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/golang/glog"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -30,7 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"github.com/cenkalti/backoff"
 
-	"github.com/ryo-watanabe/nfcl-nas-csi-driver/pkg/cloud"
+	"gitlab.devops.nifcloud.net/x_nke/hatoba-nas-csi-driver/pkg/cloud"
 )
 
 type NifcloudNasDriverConfig struct {
@@ -227,7 +226,7 @@ func (driver *NifcloudNasDriver) Run(endpoint string) {
 		}
 		err := backoff.RetryNotify(registerNodePrivateIpFunc, b, retryNotify)
 		if err != nil {
-			glog.Errorf("Error in registering node private IP: " + err.Error())
+			glog.Fatalf("Exit by error in registering node private IP: %s", err.Error())
 		}
 	}
 

@@ -23,7 +23,7 @@ import (
 	"strconv"
 	"strings"
 
-	csi "github.com/container-storage-interface/spec/lib/go/csi"
+	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/golang/glog"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc/codes"
@@ -31,9 +31,13 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"github.com/cenkalti/backoff"
 
-	"github.com/alice02/nifcloud-sdk-go-v2/service/nas"
-	"github.com/ryo-watanabe/nfcl-nas-csi-driver/pkg/cloud"
-	"github.com/ryo-watanabe/nfcl-nas-csi-driver/pkg/util"
+	"k8s.io/client-go/informers"
+	"k8s.io/client-go/tools/cache"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+
+	"github.com/aokumasan/nifcloud-sdk-go-v2/service/nas"
+	"gitlab.devops.nifcloud.net/x_nke/hatoba-nas-csi-driver/pkg/cloud"
+	"gitlab.devops.nifcloud.net/x_nke/hatoba-nas-csi-driver/pkg/util"
 )
 
 const (
@@ -44,6 +48,7 @@ const (
 
 	//defaultTier    = "standard"
 	//defaultNetwork = "default"
+	driverNamespace = "nifcloud-nas-csi-driver" // Must set in options !!!
 )
 
 // Volume attributes
@@ -62,18 +67,62 @@ type controllerServerConfig struct {
 	cloud *cloud.Cloud
 	//metaService metadata.Service
 	ipAllocator *util.IPAllocator
+	nasNameHolder *util.InstanceNameHolder
+	volumeInformer cache.SharedInformer
+	creatingPvsQueue *util.OperateResourceQueue
+	deletingPvsQueue *util.OperateResourceQueue
 }
 
 func newControllerServer(config *controllerServerConfig) csi.ControllerServer {
 	config.ipAllocator = util.NewIPAllocator(make(map[string]bool))
-	return &controllerServer{config: config}
+	config.nasNameHolder = util.NewInstanceNameHolder()
+	config.creatingPvsQueue = util.NewOperateResourceQueue("Creating PVs queue")
+	config.deletingPvsQueue = util.NewOperateResourceQueue("Deleting PVs queue")
+	controller := &controllerServer{config: config}
+
+	// Prepare PersistenVolume informer
+	informer := informers.NewSharedInformerFactory(config.driver.config.KubeClient, time.Second*10)
+	volumeHandler := cache.ResourceEventHandlerFuncs{
+		AddFunc:    func(obj interface{}) { controller.pvAdded(obj) },
+		//UpdateFunc: func(oldObj, newObj interface{}) { controller.pvUpdated(newObj) },
+		DeleteFunc: func(obj interface{}) { controller.pvDeleted(obj) },
+	}
+	controller.config.volumeInformer = informer.Core().V1().PersistentVolumes().Informer()
+	controller.config.volumeInformer.AddEventHandler(volumeHandler)
+
+	// Run informer here because controller could not have Run func. Is it right?
+	ctx := context.TODO()
+	informer.Start(ctx.Done())
+	if !cache.WaitForCacheSync(ctx.Done(), controller.config.volumeInformer.HasSynced) {
+		glog.Errorf("Error in starting volume informer")
+	}
+
+	return controller
 }
 
-/*
-func retryNotify(err error, wait time.Duration) {
-	glog.V(4).Infof("Retrying after %.2f seconds : %s", wait.Seconds(), err.Error())
+// Called when PersistentVolume resource created
+func (c *controllerServer) pvAdded(obj interface{}) {
+	var key string
+	var err error
+	if key, err = cache.DeletionHandlingMetaNamespaceKeyFunc(obj); err != nil {
+		utilruntime.HandleError(err)
+		return
+	}
+	glog.V(4).Infof("PersistentVolume %s added", key)
+	c.config.creatingPvsQueue.UnsetQueue(key)
 }
-*/
+
+// Called when PersistentVolume resource deleted
+func (c *controllerServer) pvDeleted(obj interface{}) {
+	var key string
+	var err error
+	if key, err = cache.DeletionHandlingMetaNamespaceKeyFunc(obj); err != nil {
+		utilruntime.HandleError(err)
+		return
+	}
+	glog.V(4).Infof("PersistentVolume %s deleted", key)
+	c.config.deletingPvsQueue.UnsetQueue(key)
+}
 
 // Get reserved CIDRIP from PVC's annotations
 func getIpv4CiderFromPVC(name string, driver *NifcloudNasDriver) (string, error) {
@@ -101,9 +150,36 @@ func getIpv4CiderFromPVC(name string, driver *NifcloudNasDriver) (string, error)
 	return "", fmt.Errorf("Error PVC %s not found", pvcUIDs[1])
 }
 
-// CreateVolume creates a GCFS instance
-func (s *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequest) (*csi.CreateVolumeResponse, error) {
+func (s *controllerServer) waitForNASInstanceAvailable(name string) error {
+	// wait for NAS available with backoff retry
+	b := backoff.NewExponentialBackOff()
+	b.MaxElapsedTime = time.Duration(30) * time.Minute
+	b.RandomizationFactor = 0.2
+	b.Multiplier = 1.0
+	b.InitialInterval = 30 * time.Second
+	backoffCtx := context.TODO()
+
+	chkNasInstanceAvailable := func() error {
+		chkNas, err := s.config.cloud.GetNasInstance(backoffCtx, name)
+		if err != nil {
+			return backoff.Permanent(err)
+		}
+		if *chkNas.NASInstanceStatus == "available" {
+			return nil
+		} else if *chkNas.NASInstanceStatus != "creating" && *chkNas.NASInstanceStatus != "modifying" {
+			return backoff.Permanent(fmt.Errorf("NASInstance %s status: %s", name, *chkNas.NASInstanceStatus))
+		}
+		return fmt.Errorf("NASInstance %s status: %s", name, *chkNas.NASInstanceStatus)
+	}
+
+	return backoff.RetryNotify(chkNasInstanceAvailable, b, retryNotify)
+}
+
+// CreateVolume creates a NAS instance
+func (s *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequest) (res *csi.CreateVolumeResponse, err error) {
 	glog.V(4).Infof("CreateVolume called with request %v", *req)
+
+	res = nil
 
 	// Validate arguments
 	name := req.GetName()
@@ -111,56 +187,88 @@ func (s *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 		return nil, status.Error(codes.InvalidArgument, "CreateVolume name must be provided")
 	}
 
-	if err := s.config.driver.validateVolumeCapabilities(req.GetVolumeCapabilities()); err != nil {
+	if err = s.config.driver.validateVolumeCapabilities(req.GetVolumeCapabilities()); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
-	name, capBytes, err := convertSharedRequest(ctx, name, req, s.config.driver)
+	// If request is for shared NAS, name will be converted into shared NAS name
+	// and request's name will be used as source path in shared NAS
+	pvName := name
+	defer func() {
+		if err != nil {
+			s.config.creatingPvsQueue.UnsetQueue(pvName)
+		}
+	}()
+	name, capBytes, err := s.convertSharedRequest(ctx, name, req)
 	if err != nil {
-		return nil, status.Error(codes.InvalidArgument, err.Error())
+		err = status.Error(codes.InvalidArgument, err.Error())
+		return
 	}
+	s.config.creatingPvsQueue.Show()
+
+	// Avoid multiple CreateNasInstance requests for same NASInstanceIdentifier
+	err = s.config.nasNameHolder.SetCreating(name)
+	if err != nil {
+		// Returning codes.Internal will let controller NOT to retry.
+		err = status.Error(codes.Internal, err.Error())
+		return
+	}
+	defer s.config.nasNameHolder.UnsetCreating(name)
 
 	glog.V(5).Infof("Using capacity bytes %q for volume %q", capBytes, name)
 
 	nasInput, err := cloud.GenerateNasInstanceInput(name, capBytes, req.GetParameters())
 	if err != nil {
-		return nil, status.Error(codes.InvalidArgument, err.Error())
+		err = status.Error(codes.InvalidArgument, err.Error())
+		return
 	}
+	securityGroupName, err := getSecurityGroupName(s.config.driver)
+	if err != nil {
+		err = status.Error(codes.InvalidArgument, err.Error())
+		return
+	}
+	nasInput.NASSecurityGroups = []string{securityGroupName}
 
 	// Check if the instance already exists
 	n, err := s.config.cloud.GetNasInstance(ctx, name)
 	if err != nil && !cloud.IsNotFoundErr(err) {
-		return nil, status.Error(codes.Internal, err.Error())
+		err = status.Error(codes.Internal, err.Error())
+		return
 	}
 	if n != nil {
 		// Instance already exists, check if it meets the request
 		if err = cloud.CompareNasInstanceWithInput(n, nasInput); err != nil {
-			return nil, status.Error(codes.AlreadyExists, err.Error())
+			err = status.Error(codes.AlreadyExists, err.Error())
+			return
 		}
 
 	} else {
 		// If we are creating a new instance, we need pick an unused ip from reserved-ipv4-cidr
-		reservedIPv4CIDR, err := getIpv4CiderFromPVC(req.GetName(), s.config.driver)
+		var reservedIPv4CIDR string
+		reservedIPv4CIDR, err = getIpv4CiderFromPVC(req.GetName(), s.config.driver)
 		if err != nil {
-			return nil, status.Error(codes.InvalidArgument, "volume name invalid")
+			err = status.Error(codes.InvalidArgument, "volume name invalid")
+			return
 		}
 		if reservedIPv4CIDR == "" {
 			reservedIPv4CIDR = req.GetParameters()["reservedIpv4Cidr"]
 			if reservedIPv4CIDR == "" {
-				return nil, status.Error(codes.InvalidArgument, "reservedIpv4Cidr must be provided")
+				err = status.Error(codes.InvalidArgument, "reservedIpv4Cidr must be provided")
+				return
 			}
 			glog.V(4).Infof("Using reserved IPv4 CIDR of storage class : %s", reservedIPv4CIDR)
 		} else {
 			glog.V(4).Infof("Using reserved IPv4 CIDR of PVC : %s", reservedIPv4CIDR)
 		}
-		reservedIP, err := s.reserveIP(ctx, reservedIPv4CIDR)
+		var reservedIP string
+		reservedIP, err = s.reserveIP(ctx, reservedIPv4CIDR)
 
 		// Possible cases are 1) CreateInstanceAborted, 2)CreateInstance running in background
 		// The ListInstances response will contain the reservedIPs if the operation was started
 		// In case of abort, the IP is released and available for reservation
 		defer s.config.ipAllocator.ReleaseIP(reservedIP)
 		if err != nil {
-			return nil, err
+			return
 		}
 		reservedIP = reservedIP + "/24"
 
@@ -171,63 +279,52 @@ func (s *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 		glog.V(4).Infof("Create NAS Instance called with input %v", nasInput)
 		n, err = s.config.cloud.CreateNasInstance(ctx, nasInput)
 		if err != nil {
-			return nil, status.Error(codes.Internal, err.Error())
-		}
-
-		// wait for NAS available with backoff retry
-		b := backoff.NewExponentialBackOff()
-		b.MaxElapsedTime = time.Duration(30) * time.Minute
-		b.RandomizationFactor = 0.2
-		b.Multiplier = 1.0
-		b.InitialInterval = 30 * time.Second
-		backoffCtx := context.TODO()
-
-		chkNasInstanceAvailable := func() error {
-			chkNas, err := s.config.cloud.GetNasInstance(backoffCtx, name)
-			if err != nil {
-				return backoff.Permanent(err)
-			}
-			if *chkNas.NASInstanceStatus == "available" {
-				return nil
-			} else if *chkNas.NASInstanceStatus != "creating" && *chkNas.NASInstanceStatus != "modifying" {
-				return backoff.Permanent(fmt.Errorf("NASInstance %s status: %s", name, *chkNas.NASInstanceStatus))
-			}
-			return fmt.Errorf("NASInstance %s status: %s", name, *chkNas.NASInstanceStatus)
-		}
-		err = backoff.RetryNotify(chkNasInstanceAvailable, b, retryNotify)
-		if err != nil {
-			return nil, status.Error(codes.Internal, "Error waiting for NASInstance creating > available: " + err.Error())
-		}
-
-		// Set no_root_squash and get NAS Instance again
-		n, err = s.config.cloud.ModifyNasInstance(backoffCtx, name)
-		if err != nil {
-			return nil, status.Error(codes.Internal, err.Error())
-		}
-
-		// Wait for modifying -> available again
-		b.Reset()
-		err = backoff.RetryNotify(chkNasInstanceAvailable, b, retryNotify)
-		if err != nil {
-			return nil, status.Error(codes.Internal, "Error waiting for NASInstance modifying > available: " + err.Error())
-		}
-		// Must update n again
-		n, err = s.config.cloud.GetNasInstance(ctx, name)
-		if err != nil {
-			return nil, status.Error(codes.Internal, err.Error())
+			err = status.Error(codes.Internal, err.Error())
+			return
 		}
 	}
 
 	if *n.NASInstanceStatus != "available" {
-		msg := fmt.Sprintf("NAS Instance %s already exists: status:%s", name, *n.NASInstanceStatus)
-		glog.V(5).Infof(msg)
 		if *n.NASInstanceStatus == "creating" || *n.NASInstanceStatus == "modifying" {
-			// Returning codes.Aborted will let controller to retry.
-			// This causes warning events in PVC. Is there better way to ask controller to retry ?
-			return nil, status.Error(codes.Aborted, msg)
+			// Wait for creating -> available
+			err = s.waitForNASInstanceAvailable(name)
+			if err != nil {
+				err = status.Error(codes.Internal, "Error waiting for NASInstance creating > available: " + err.Error())
+				return
+			}
 		} else {
 			// Returning codes.Internal will let controller NOT to retry.
-			return nil, status.Error(codes.Internal, msg)
+			err = status.Error(codes.Internal, fmt.Sprintf("NAS Instance %s status:%s", name, *n.NASInstanceStatus))
+			return
+		}
+		// Must update n again
+		n, err = s.config.cloud.GetNasInstance(context.TODO(), name)
+		if err != nil {
+			err = status.Error(codes.Internal, err.Error())
+			return
+		}
+	}
+
+	if *n.NoRootSquash == "false" {
+		// Set no_root_squash and get NAS Instance again
+		n, err = s.config.cloud.ModifyNasInstance(context.TODO(), name)
+		if err != nil {
+			err = status.Error(codes.Internal, err.Error())
+			return
+		}
+
+		// Wait for modifying -> available again
+		err = s.waitForNASInstanceAvailable(name)
+		if err != nil {
+			err = status.Error(codes.Internal, "Error waiting for NASInstance modifying > available: " + err.Error())
+			return
+		}
+
+		// Must update n again
+		n, err = s.config.cloud.GetNasInstance(context.TODO(), name)
+		if err != nil {
+			err = status.Error(codes.Internal, err.Error())
+			return
 		}
 	}
 
@@ -235,13 +332,17 @@ func (s *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 	if req.GetParameters()["shared"] == "true" {
 		err = makeSourcePath(getNasInstancePrivateIP(n), *n.NASInstanceIdentifier, req.GetName())
 		if err != nil {
-			return nil, status.Error(codes.Internal, "error making source path for shared NASInstance:" + err.Error())
+			err = status.Error(codes.Internal, "error making source path for shared NASInstance:" + err.Error())
+			return
 		}
 	}
 
 	vol := s.nasInstanceToCSIVolume(n, req)
 	glog.V(4).Infof("Volume created: %v", vol)
-	return &csi.CreateVolumeResponse{Volume: vol}, nil
+
+	res = &csi.CreateVolumeResponse{Volume: vol}
+	err = nil
+	return
 }
 
 // reserveIPRange returns the available IP in the cidr
@@ -272,7 +373,7 @@ func (s *controllerServer) getCloudInstancesReservedIPs(ctx context.Context) (ma
 }
 
 // DeleteVolume deletes a GCFS instance
-func (s *controllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVolumeRequest) (*csi.DeleteVolumeResponse, error) {
+func (s *controllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVolumeRequest) (res *csi.DeleteVolumeResponse, err error) {
 	glog.V(4).Infof("DeleteVolume called with request %v", *req)
 
 	volumeId := req.GetVolumeId()
@@ -298,22 +399,34 @@ func (s *controllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVolu
 	}
 
 	if shared {
+		// Queue in delete PVs operaions
+		defer func() {
+			if err != nil {
+				s.config.deletingPvsQueue.UnsetQueue(sourcePath)
+			}
+		}()
+		err = s.config.deletingPvsQueue.Queue(sourcePath)
+		if err != nil {
+			return nil, status.Error(codes.Internal, "deleting queue:" + err.Error())
+		}
+		s.config.deletingPvsQueue.Show()
 		// Remove source path on shared nas
 		err := removeSourcePath(getNasInstancePrivateIP(nas), *nas.NASInstanceIdentifier, sourcePath)
 		if err != nil {
 			return nil, status.Error(codes.Internal, "removing source path:" + err.Error())
 		}
-
-		// Check if other PVs on the nas
-		reservedBytes, err := getNasInstanceReservedCap(*nas.NASInstanceIdentifier, s.config.driver)
+		// check any other PVs on shared NAS
+		mustDeleted, err := noOtherPvsInSharedNas(sourcePath, *nas.NASInstanceIdentifier, s.config.driver)
 		if err != nil {
-			return nil, status.Error(codes.Internal, "checking other PVs on the shared nas:" + err.Error())
+			return nil, status.Error(codes.Internal, "checking other PVs on shared NAS:" + err.Error())
 		}
-		if reservedBytes > 0 {
+		if !mustDeleted {
 			return &csi.DeleteVolumeResponse{}, nil
 		}
+		glog.V(4).Infof("No other PVs than %s in shared NAS %s", sourcePath, *nas.NASInstanceIdentifier)
 	}
 
+	glog.V(4).Infof("Deleting NAS instance %s", *nas.NASInstanceIdentifier)
 	err = s.config.cloud.DeleteNasInstance(ctx, *nas.NASInstanceIdentifier)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())

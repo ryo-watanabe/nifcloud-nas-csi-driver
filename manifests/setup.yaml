@@ -44,12 +44,25 @@ roleRef:
 kind: ClusterRoleBinding
 apiVersion: rbac.authorization.k8s.io/v1
 metadata:
-  name: nifcloud-nas-csi-node-provisioner-binding
+  name: nifcloud-nas-csi-controller-view-binding
+subjects:
+  - kind: ServiceAccount
+    name: nifcloud-nas-csi-controller-sa
+    namespace: nifcloud-nas-csi-driver
+roleRef:
+  kind: ClusterRole
+  name: system:aggregate-to-view
+  apiGroup: rbac.authorization.k8s.io
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: nifcloud-nas-csi-node-binding
 subjects:
   - kind: ServiceAccount
     name: nifcloud-nas-csi-node-sa
     namespace: nifcloud-nas-csi-driver
 roleRef:
   kind: ClusterRole
-  name: system:csi-external-provisioner
+  name: system:node
   apiGroup: rbac.authorization.k8s.io

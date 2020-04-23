@@ -24,28 +24,34 @@ import (
 	"strconv"
 	"strings"
 
-	csi "github.com/container-storage-interface/spec/lib/go/csi"
+	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/golang/glog"
 	"golang.org/x/net/context"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/kubernetes/pkg/util/mount"
+	"k8s.io/apimachinery/pkg/util/rand"
 
-	//"github.com/alice02/nifcloud-sdk-go-v2/service/nas"
-	//"github.com/ryo-watanabe/nfcl-nas-csi-driver/pkg/cloud"
-	"github.com/ryo-watanabe/nfcl-nas-csi-driver/pkg/util"
+	"gitlab.devops.nifcloud.net/x_nke/hatoba-nas-csi-driver/pkg/util"
 )
 
 // Convert CreateVolumeRequest into shared
-func convertSharedRequest(
+func (s *controllerServer) convertSharedRequest(
 	ctx context.Context,
 	name string,
 	req *csi.CreateVolumeRequest,
-	driver *NifcloudNasDriver,
 	) (string, int64, error) {
 
 	if req.GetParameters()["shared"] != "true" {
 		return name, getRequestCapacity(req.GetCapacityRange(), minVolumeSize), nil
 	}
+
+	err := s.config.creatingPvsQueue.Queue(name)
+	if err != nil {
+		return "", 0, fmt.Errorf("Error creating queue: %s", err.Error())
+	}
+
+	glog.V(4).Infof("Start creating shared PV %s", name)
+
 	capBytes := getRequestCapacityNoMinimum(req.GetCapacityRange())
 	sharedCapGiBytes, err := strconv.ParseInt(req.GetParameters()["capacityParInstanceGiB"], 10, 64)
 	if err != nil {
@@ -59,44 +65,62 @@ func convertSharedRequest(
 	}
 
 	// Get kube-system UID for cluster ID
-	clusterUID, err := getNamespaceUID("kube-system", driver)
+	clusterUID, err := getNamespaceUID("kube-system", s.config.driver)
 	if err != nil {
 		return "", 0, fmt.Errorf("Error getting namespace UID: %S", err.Error())
 	}
 
 	// Search which NAS Instance the volume to settle in.
 	sharedName := ""
-	sharedNamePrefix := "cluster-" + clusterUID + "-shared-" +  req.GetParameters()["instanceType"]
+	sharedNamePrefix := "cluster-" + clusterUID + "-shd" +  req.GetParameters()["instanceType"]
 	for i := 1; i <= 10; i++ {
 		// Generate NAS Instance name
 		sharedName = sharedNamePrefix + fmt.Sprintf("%03d", i)
-		reservedBytes, err := getNasInstanceReservedCap(sharedName, driver)
+		reservedBytes, err := getNasInstanceReservedCap(sharedName, s.config.driver)
 		if err != nil {
 			return "", 0, fmt.Errorf("Error getting reserved cap of shared nas: %S", err.Error())
 		}
 		if reservedBytes == 0 {
 			// New shared nas
-			glog.V(5).Infof("New shared NAS instance %s for %s", sharedName, name)
+			// Search creating NAS with shared name
+			var ok bool
+			sharedName, ok, err = getSharedNameFromExistingNas(ctx, sharedName, s.config.driver)
+			if err != nil {
+				return "", 0, fmt.Errorf("Error getting existing nas names: %s", err.Error())
+			}
+			if !ok {
+				// Add random string at the end of nas name to be treated as another instance when recreated
+				sharedName += "-" + rand.String(5)
+			}
+			glog.V(4).Infof("New shared NAS instance %s for %s", sharedName, name)
 			break
+		}
+		sharedName, err = getSharedNameFromExistingPv(sharedName, s.config.driver)
+		if err != nil {
+			return "", 0, fmt.Errorf("Error getting shared nas name: %S", err.Error())
 		}
 
 		// Check available caps
-		nas, err := driver.config.Cloud.GetNasInstance(ctx, sharedName)
+		nas, err := s.config.driver.config.Cloud.GetNasInstance(ctx, sharedName)
 		if err != nil {
 			return "", 0, fmt.Errorf("Error getting nas instance: %S", err.Error())
 		}
 		if capBytes <= getNasInstanceCapacityBytes(nas) - reservedBytes {
 			// Place this volume in this nas.
-			glog.V(5).Infof("Place %s in shared NAS instance %s", name, sharedName)
+			glog.V(4).Infof("Place %s in shared NAS instance %s", name, sharedName)
 			break
 		}
-		glog.V(5).Infof("No enough space for %s in shared NAS instance %s", name, sharedName)
+		glog.V(4).Infof("No enough space for %s in shared NAS instance %s", name, sharedName)
+		if i == 10 {
+			return "", 0, fmt.Errorf("Cannot create more than 10 shared NASs")
+		}
 	}
 
 	return sharedName, sharedCapBytes, nil
 }
 
 // Check available space in shared nas
+// Both nas names with or without random string are OK for input nasName
 func getNasInstanceReservedCap(nasName string, driver *NifcloudNasDriver) (int64, error) {
 	kubeClient := driver.config.KubeClient
 
@@ -114,7 +138,7 @@ func getNasInstanceReservedCap(nasName string, driver *NifcloudNasDriver) (int64
 			if strings.Contains(csi.VolumeHandle, nasName) {
 				if capQuantity, ok := pv.Spec.Capacity["storage"]; ok {
 					if capBytes, ok := capQuantity.AsInt64(); ok {
-						glog.V(5).Infof("Reserved cap %d for %s", capBytes, pv.ObjectMeta.GetName())
+						glog.V(4).Infof("Reserved cap %d for %s", capBytes, pv.ObjectMeta.GetName())
 						used += capBytes
 					}
 				}
@@ -122,8 +146,80 @@ func getNasInstanceReservedCap(nasName string, driver *NifcloudNasDriver) (int64
 		}
 	}
 
-	glog.V(5).Infof("Total reserved cap %d in %s", used, nasName)
+	glog.V(4).Infof("Total reserved cap %d in %s", used, nasName)
 	return used, nil
+}
+
+// Check any other PVs on shared NAS
+func noOtherPvsInSharedNas(name, nasName string, driver *NifcloudNasDriver) (bool, error) {
+	kubeClient := driver.config.KubeClient
+
+	// Get PV list
+	pvs, err := kubeClient.CoreV1().PersistentVolumes().List(metav1.ListOptions{})
+	if err != nil {
+		return false, fmt.Errorf("Error getting PV list : %s", err.Error())
+	}
+
+	// Check other PV in the nas
+	var nasFound = false
+	var noOtherPVs = true
+	for _, pv := range pvs.Items {
+		if csi := pv.Spec.PersistentVolumeSource.CSI; csi != nil {
+			if strings.Contains(csi.VolumeHandle, nasName) {
+				nasFound = true
+				if name != pv.ObjectMeta.GetName() {
+					glog.V(4).Infof("Other PV %s found (status.phase=%s) in shared NAS %s", pv.ObjectMeta.GetName(), pv.Status.Phase, nasName)
+					noOtherPVs = false
+				}
+			}
+		}
+	}
+	if !nasFound {
+		return false, fmt.Errorf("Nas %s not found in PV list", nasName)
+	}
+
+	return noOtherPVs, nil
+}
+
+// Get the nas name with rondom string from prefixed part of the name
+func getSharedNameFromExistingPv(nasName string, driver *NifcloudNasDriver) (string, error) {
+	kubeClient := driver.config.KubeClient
+
+	// Get PV list
+	pvs, err := kubeClient.CoreV1().PersistentVolumes().List(metav1.ListOptions{})
+	if err != nil {
+		return "", fmt.Errorf("Error getting PV list : %s", err.Error())
+	}
+
+	// Get csi.Volumehandle from PV
+	for _, pv := range pvs.Items {
+		if csi := pv.Spec.PersistentVolumeSource.CSI; csi != nil {
+			if strings.Contains(csi.VolumeHandle, nasName) {
+				// Parse VolumeHandle and get nas name
+				tokens := strings.Split(csi.VolumeHandle, "/")
+				if len(tokens) != 3 {
+					return "", fmt.Errorf("VolumeHandle format error : %s", csi.VolumeHandle)
+				}
+				return tokens[1], nil
+			}
+		}
+	}
+
+	return "", fmt.Errorf("Cannot find VolumeHandle %s", nasName)
+}
+
+// Get the nas name with rondom string from prefixed part of the name
+func getSharedNameFromExistingNas(ctx context.Context, nasName string, driver *NifcloudNasDriver) (string, bool, error) {
+	instances, err := driver.config.Cloud.ListNasInstances(ctx)
+	if err != nil {
+		return nasName, false, err
+	}
+	for _, n := range instances {
+		if strings.Contains(*n.NASInstanceIdentifier, nasName) && *n.NASInstanceStatus != "deleting" {
+			return *n.NASInstanceIdentifier, true, nil
+		}
+	}
+	return nasName, false, nil
 }
 
 // Get namespace UID
@@ -140,7 +236,7 @@ func getNamespaceUID(name string, driver *NifcloudNasDriver) (string, error) {
 func opSourcePath(ip, nasName, sourcePath string, remove bool) error {
 
 	// Mount point
-	mountPoint := filepath.Join("tmp", nasName)
+	mountPoint := filepath.Join("tmp", sourcePath, "mnt")
 	err := os.MkdirAll(mountPoint, 0755)
 	if err != nil {
 		return fmt.Errorf("Error making mount point %s: %s", mountPoint, err.Error())
@@ -173,6 +269,12 @@ func opSourcePath(ip, nasName, sourcePath string, remove bool) error {
 	err = mounter.Unmount(mountPoint)
 	if err != nil {
 		return fmt.Errorf("Umount error:", err.Error())
+	}
+	// Remove mount point
+	mountPointParent := filepath.Join("tmp", sourcePath)
+	err = os.RemoveAll(mountPointParent)
+	if err != nil {
+		return fmt.Errorf("Error removing mount point %s: %s", mountPointParent, err.Error())
 	}
 
 	return nil

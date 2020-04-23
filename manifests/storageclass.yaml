@@ -6,6 +6,5 @@ provisioner: nas.csi.storage.nifcloud.com
 parameters:
   zone: east-11
   instanceType: "0"
-  securityGroup: c01nasfw
   networkId: net-0123abcd
-  reservedIpv4Cidr: 192.168.20.0/26
+  reservedIpv4Cidr: 192.168.10.64/29

@@ -24,14 +24,17 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/kubernetes/pkg/util/mount"
-	"github.com/ryo-watanabe/nfcl-nas-csi-driver/pkg/cloud"
-	"github.com/ryo-watanabe/nfcl-nas-csi-driver/pkg/driver"
+	"gitlab.devops.nifcloud.net/x_nke/hatoba-nas-csi-driver/pkg/cloud"
+	"gitlab.devops.nifcloud.net/x_nke/hatoba-nas-csi-driver/pkg/driver"
 )
 
 var (
 	endpoint      = flag.String("endpoint", "unix:/tmp/csi.sock", "CSI endpoint")
 	nodeID        = flag.String("nodeid", "", "node id")
 	region        = flag.String("region", "jp-east-1", "nifcloud region")
+	naaphost      = flag.String("naaphost", "auth-proxy.naap", "NAAP host address")
+	naapscheme    = flag.String("naapscheme", "https", "NAAP host scheme")
+	usenaap       = flag.Bool("usenaap", true, "Use NAAP proxy")
 	runController = flag.Bool("controller", false, "run controller service")
 	runNode       = flag.Bool("node", false, "run node service")
 
@@ -55,7 +58,7 @@ func main() {
 
 	var provider *cloud.Cloud
 	if *runController {
-		provider, err = cloud.NewCloud(*region)
+		provider, err = cloud.NewCloud(*region, *naaphost, *naapscheme, *usenaap)
 		if err != nil {
 			glog.Fatalf("Failed to initialize cloud provider: %v", err)
 		}

@@ -27,8 +27,8 @@ import (
 	"k8s.io/apimachinery/pkg/util/runtime"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/alice02/nifcloud-sdk-go-v2/service/nas"
-	"github.com/ryo-watanabe/nfcl-nas-csi-driver/pkg/cloud"
+	"github.com/aokumasan/nifcloud-sdk-go-v2/service/nas"
+	"gitlab.devops.nifcloud.net/x_nke/hatoba-nas-csi-driver/pkg/cloud"
 )
 
 type NSGSyncer struct {
@@ -58,6 +58,16 @@ func (s *NSGSyncer) runNSGSyncer() {
 	if err != nil {
 		runtime.HandleError(err)
 	}
+}
+
+func getSecurityGroupName(driver *NifcloudNasDriver) (string, error) {
+	// Get kube-system UID for NAS Security Group Name
+	clusterUID, err := getNamespaceUID("kube-system", driver)
+	if err != nil {
+		return "", fmt.Errorf("Error getting namespace UUID: %S", err.Error())
+	}
+
+	return "cluster-" + clusterUID, nil
 }
 
 // Sync StorageClass resource and NasSecurityGrooup
@@ -95,7 +105,12 @@ func (s *NSGSyncer) SyncNasSecurityGroups() error {
 	}
 	glog.V(5).Infof("nodePrivateIps : %v", nodePrivateIps)
 
+
 	// NAS Security Groups
+	securityGroupName, err := getSecurityGroupName(s.driver)
+	if err != nil {
+		return fmt.Errorf("Error getting security group name: %s", err.Error())
+	}
 	classes, err := kubeClient.StorageV1().StorageClasses().List(metav1.ListOptions{})
 	if err != nil {
 		return fmt.Errorf("Error getting storage class: %s", err.Error())
@@ -103,12 +118,11 @@ func (s *NSGSyncer) SyncNasSecurityGroups() error {
 	securityGroupInputs := make(map[string]nas.CreateNASSecurityGroupInput, 0)
 	for _, class := range classes.Items {
 		if class.Provisioner == s.driver.config.Name {
-			name := class.Parameters["securityGroup"]
 			zone := class.Parameters["zone"]
-			if name != "" && zone != "" {
-				securityGroupInputs[name] = nas.CreateNASSecurityGroupInput{
+			if securityGroupName != "" && zone != "" {
+				securityGroupInputs[securityGroupName] = nas.CreateNASSecurityGroupInput{
 					AvailabilityZone: &zone,
-					NASSecurityGroupName: &name,
+					NASSecurityGroupName: &securityGroupName,
 				}
 			}
 		}
@@ -156,6 +170,15 @@ func (s *NSGSyncer) SyncNasSecurityGroups() error {
 			}
 		}
 
+		// Check security group is editable
+		editable := true
+		for _, aip := range nsg.IPRanges {
+			if *aip.Status != "authorized" {
+				editable = false
+				break
+			}
+		}
+
 		// Authorize node private ip if not.
 		for ip, _ := range nodePrivateIps {
 			authorized := false
@@ -168,6 +191,11 @@ func (s *NSGSyncer) SyncNasSecurityGroups() error {
 			}
 			if !authorized {
 				s.hasTask = true
+				if !editable {
+					// Not recovered from Client.Resource.IncorrectState.ApplyNASSecurityGroup
+					glog.V(4).Infof("Pending authorize CIDRIP %s : SecurityGroup %s not in editable state", iprange, *scInput.NASSecurityGroupName)
+					return nil
+				}
 				_, err = s.driver.config.Cloud.AuthorizeCIDRIP(ctx, *scInput.NASSecurityGroupName, iprange)
 				if err != nil {
 					return fmt.Errorf("Error authorizing NASSecurityGroup ingress: %s", err.Error())
@@ -190,6 +218,11 @@ func (s *NSGSyncer) SyncNasSecurityGroups() error {
 			}
 			if !nodeExists {
 				s.hasTask = true
+				if !editable {
+					// Not recovered from Client.Resource.IncorrectState.ApplyNASSecurityGroup
+					glog.V(4).Infof("Pending revoke CIDRIP %s : SecurityGroup %s not in editable state", *aip.CIDRIP, *scInput.NASSecurityGroupName)
+					return nil
+				}
 				_, err = s.driver.config.Cloud.RevokeCIDRIP(ctx, *scInput.NASSecurityGroupName, *aip.CIDRIP)
 				if err != nil {
 					return fmt.Errorf("Error revoking NASSecurityGroup ingress: %s", err.Error())
