@@ -29,7 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"github.com/cenkalti/backoff"
 
-	"gitlab.devops.nifcloud.net/x_nke/hatoba-nas-csi-driver/pkg/cloud"
+	"github.com/ryo-watanabe/nfcl-nas-csi-driver/pkg/cloud"
 )
 
 type NifcloudNasDriverConfig struct {

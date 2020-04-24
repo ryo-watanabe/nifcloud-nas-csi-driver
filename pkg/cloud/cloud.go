@@ -13,7 +13,7 @@ import (
         "github.com/aokumasan/nifcloud-sdk-go-v2/service/computing"
         "github.com/aokumasan/nifcloud-sdk-go-v2/service/nas"
 
-	"gitlab.devops.nifcloud.net/x_nke/hatoba-nas-csi-driver/pkg/util"
+	"github.com/ryo-watanabe/nfcl-nas-csi-driver/pkg/util"
 )
 
 type Cloud struct {
@@ -21,14 +21,13 @@ type Cloud struct {
 	Nas *nas.Client
 	Computing *computing.Client
 	Region string
-	Naap *Naap
 }
 
 //type NasInstance struct {
 //	nas.NASInstance
 //}
 
-func NewCloud(region, naaphost, naapscheme string, usenaap bool) (*Cloud, error) {
+func NewCloud(region string) (*Cloud, error) {
 
 	// Get credentials
 	accesskey := os.Getenv("AWS_ACCESS_KEY_ID")
@@ -43,20 +42,11 @@ func NewCloud(region, naaphost, naapscheme string, usenaap bool) (*Cloud, error)
 	// Create config with credentials and region.
         cfg := nifcloud.NewConfig(accesskey, secretkey, region)
 
-	naapuser := "naapuser"
-	if usenaap {
-		naapuser = os.Getenv("NAAP_USER")
-		if naapuser == "" {
-			return nil, fmt.Errorf("Cannot set naapuser from env.")
-		}
-	}
-
 	return &Cloud{
                 //Session: sess,
 		Nas: nas.New(cfg),
 		Computing: computing.New(cfg),
 		Region: region,
-		Naap: NewNaap(naapuser, naaphost, naapscheme, usenaap),
 	}, nil
 }
 
@@ -129,10 +119,6 @@ func (c *Cloud) GetNasInstance(ctx context.Context, name string) (*nas.NASInstan
 		&nas.DescribeNASInstancesInput{NASInstanceIdentifier: &name},
 	)
 
-	err := c.Naap.ConvertToNaapRequest(req.Request)
-	if err != nil {
-		return nil, err
-	}
 	output, err := req.Send(ctx)
 	if err != nil {
 		return nil, err
@@ -181,10 +167,7 @@ func CompareNasInstanceWithInput(n *nas.NASInstance, in *nas.CreateNASInstanceIn
 func (c *Cloud) ListNasInstances(ctx context.Context) ([]nas.NASInstance, error) {
 	// Call describe NAS Instances
 	req := c.Nas.DescribeNASInstancesRequest(&nas.DescribeNASInstancesInput{})
-	err := c.Naap.ConvertToNaapRequest(req.Request)
-	if err != nil {
-		return nil, err
-	}
+
 	output, err := req.Send(ctx)
 	if err != nil {
 		return nil, err
@@ -196,10 +179,7 @@ func (c *Cloud) ListNasInstances(ctx context.Context) ([]nas.NASInstance, error)
 func (c *Cloud) CreateNasInstance(ctx context.Context, n *nas.CreateNASInstanceInput) (*nas.NASInstance, error) {
 	// Call create NAS Instances
 	req := c.Nas.CreateNASInstanceRequest(n)
-	err := c.Naap.ConvertToNaapRequest(req.Request)
-	if err != nil {
-		return nil, err
-	}
+
 	output, err := req.Send(ctx)
 	if err != nil {
 		return nil, err
@@ -213,10 +193,7 @@ func (c *Cloud) ModifyNasInstance(ctx context.Context, name string) (*nas.NASIns
 	req := c.Nas.ModifyNASInstanceRequest(
 		&nas.ModifyNASInstanceInput{NASInstanceIdentifier: &name, NoRootSquash: &no_root_squash},
 	)
-	err := c.Naap.ConvertToNaapRequest(req.Request)
-	if err != nil {
-		return nil, err
-	}
+
 	output, err := req.Send(ctx)
 	if err != nil {
 		return nil, err
@@ -229,11 +206,8 @@ func (c *Cloud) DeleteNasInstance(ctx context.Context, name string) error {
 	req := c.Nas.DeleteNASInstanceRequest(
 		&nas.DeleteNASInstanceInput{NASInstanceIdentifier: &name},
 	)
-	err := c.Naap.ConvertToNaapRequest(req.Request)
-	if err != nil {
-		return err
-	}
-	_, err = req.Send(ctx)
+
+	_, err := req.Send(ctx)
 	if err != nil {
 		return err
 	}
@@ -265,10 +239,7 @@ func (c *Cloud) GetNasSecurityGroup(ctx context.Context, name string) (*nas.NASS
 	req := c.Nas.DescribeNASSecurityGroupsRequest(
 		&nas.DescribeNASSecurityGroupsInput{NASSecurityGroupName: &name},
 	)
-	err := c.Naap.ConvertToNaapRequest(req.Request)
-	if err != nil {
-		return nil, err
-	}
+
 	output, err := req.Send(ctx)
 	if err != nil {
 		return nil, err
@@ -279,10 +250,7 @@ func (c *Cloud) GetNasSecurityGroup(ctx context.Context, name string) (*nas.NASS
 func (c *Cloud) CreateNasSecurityGroup(ctx context.Context, sc *nas.CreateNASSecurityGroupInput) (*nas.NASSecurityGroup, error) {
 	// Call create NAS Instances
 	req := c.Nas.CreateNASSecurityGroupRequest(sc)
-	err := c.Naap.ConvertToNaapRequest(req.Request)
-	if err != nil {
-		return nil, err
-	}
+
 	output, err := req.Send(ctx)
 	if err != nil {
 		return nil, err
@@ -295,10 +263,7 @@ func (c *Cloud) AuthorizeCIDRIP(ctx context.Context, name, cidrip string) (*nas.
 	req := c.Nas.AuthorizeNASSecurityGroupIngressRequest(
 		&nas.AuthorizeNASSecurityGroupIngressInput{NASSecurityGroupName: &name, CIDRIP: &cidrip},
 	)
-	err := c.Naap.ConvertToNaapRequest(req.Request)
-	if err != nil {
-		return nil, err
-	}
+
 	output, err := req.Send(ctx)
 	if err != nil {
 		return nil, err
@@ -311,10 +276,7 @@ func (c *Cloud) RevokeCIDRIP(ctx context.Context, name, cidrip string) (*nas.NAS
 	req := c.Nas.RevokeNASSecurityGroupIngressRequest(
 		&nas.RevokeNASSecurityGroupIngressInput{NASSecurityGroupName: &name, CIDRIP: &cidrip},
 	)
-	err := c.Naap.ConvertToNaapRequest(req.Request)
-	if err != nil {
-		return nil, err
-	}
+
 	output, err := req.Send(ctx)
 	if err != nil {
 		return nil, err

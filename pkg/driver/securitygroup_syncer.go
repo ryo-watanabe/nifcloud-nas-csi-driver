@@ -28,7 +28,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/aokumasan/nifcloud-sdk-go-v2/service/nas"
-	"gitlab.devops.nifcloud.net/x_nke/hatoba-nas-csi-driver/pkg/cloud"
+	"github.com/ryo-watanabe/nfcl-nas-csi-driver/pkg/cloud"
 )
 
 type NSGSyncer struct {

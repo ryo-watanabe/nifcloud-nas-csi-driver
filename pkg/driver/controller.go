@@ -36,8 +36,8 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 
 	"github.com/aokumasan/nifcloud-sdk-go-v2/service/nas"
-	"gitlab.devops.nifcloud.net/x_nke/hatoba-nas-csi-driver/pkg/cloud"
-	"gitlab.devops.nifcloud.net/x_nke/hatoba-nas-csi-driver/pkg/util"
+	"github.com/ryo-watanabe/nfcl-nas-csi-driver/pkg/cloud"
+	"github.com/ryo-watanabe/nfcl-nas-csi-driver/pkg/util"
 )
 
 const (

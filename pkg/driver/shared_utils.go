@@ -31,7 +31,7 @@ import (
 	"k8s.io/kubernetes/pkg/util/mount"
 	"k8s.io/apimachinery/pkg/util/rand"
 
-	"gitlab.devops.nifcloud.net/x_nke/hatoba-nas-csi-driver/pkg/util"
+	"github.com/ryo-watanabe/nfcl-nas-csi-driver/pkg/util"
 )
 
 // Convert CreateVolumeRequest into shared
