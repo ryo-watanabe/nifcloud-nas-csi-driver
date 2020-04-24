@@ -36,6 +36,7 @@ var (
 	runNode       = flag.Bool("node", false, "run node service")
 
 	version = "v0.0.1"
+	revision = "undef"
 )
 
 const driverName = "nas.csi.storage.nifcloud.com"
@@ -43,6 +44,8 @@ const driverName = "nas.csi.storage.nifcloud.com"
 func main() {
 	flag.Set("logtostderr", "true")
 	flag.Parse()
+
+	glog.Infof("Nifcloud Nas CSI driver version %v %v", version, revision)
 
 	cfg, err := clientcmd.BuildConfigFromFlags("", "")
 	if err != nil {
@@ -77,7 +80,7 @@ func main() {
 		glog.Fatalf("Failed to initialize Nifcloud Nas CSI Driver: %v", err)
 	}
 
-	glog.Infof("Running Nifcloud Nas CSI driver version %v", version)
+	glog.Infof("Running driver...")
 	nfnsDriver.Run(*endpoint)
 
 	os.Exit(0)
