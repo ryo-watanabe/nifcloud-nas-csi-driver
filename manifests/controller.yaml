@@ -21,7 +21,7 @@ spec:
       containers:
         - name: csi-external-attacher
           imagePullPolicy: Always
-          image: quay.io/k8scsi/csi-attacher:v2.0.0
+          image: quay.io/k8scsi/csi-attacher:v2.2.0
           args:
             - "--v=4"
             - "--csi-address=/csi/csi.sock"
@@ -30,11 +30,20 @@ spec:
               mountPath: /csi
         - name: csi-external-provisioner
           imagePullPolicy: Always
-          image: quay.io/k8scsi/csi-provisioner:v1.4.0
+          image: quay.io/k8scsi/csi-provisioner:v1.5.0
           args:
             - "--timeout=30m"
             - "--v=4"
             - "--csi-address=/csi/csi.sock"
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+        - name: csi-snapshotter
+          image: quay.io/k8scsi/csi-snapshotter:v2.1.1
+          args:
+            - "--v=4"
+            - "--csi-address=/csi/csi.sock"
+            #- --leader-election=true
           volumeMounts:
             - name: socket-dir
               mountPath: /csi
@@ -48,7 +57,6 @@ spec:
             - "--endpoint=unix:/csi/csi.sock"
             - "--nodeid=$(KUBE_NODE_NAME)"
             - "--controller=true"
-            - "--naaphost=naap.hatoba.nifcloud.com"
           env:
             - name: KUBE_NODE_NAME
               valueFrom:
@@ -64,11 +72,6 @@ spec:
                 secretKeyRef:
                   name: cloud-credential
                   key: secretkey
-            - name: NAAP_USER
-              valueFrom:
-                secretKeyRef:
-                  name: cloud-credential
-                  key: naapuser
           volumeMounts:
             - name: socket-dir
               mountPath: /csi

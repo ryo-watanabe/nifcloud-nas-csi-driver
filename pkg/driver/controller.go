@@ -18,6 +18,8 @@ limitations under the License.
 package driver
 
 import (
+	"encoding/json"
+	"path/filepath"
 	"fmt"
 	"time"
 	"strconv"
@@ -542,6 +544,160 @@ func (s *controllerServer) nasInstanceToCSIVolume(n *nas.NASInstance, req *csi.C
 	}
 }
 
+// Get PVC name / namespace from volumeID
+func getPVCFromVolumeId(volumeId string, driver *NifcloudNasDriver) (string, string, error) {
+	kubeClient := driver.config.KubeClient
+	pvcUIDs := strings.SplitN(volumeId, "-", 2)
+	if len(pvcUIDs) < 2 {
+		return "", "", fmt.Errorf("Error splitting UID %s", volumeId)
+	}
+	pvcs, err := kubeClient.CoreV1().PersistentVolumeClaims("").List(metav1.ListOptions{})
+	if err != nil {
+		return "", "", fmt.Errorf("Error getting PVC list : %s", err.Error())
+	}
+	for _, pvc := range pvcs.Items {
+		if string(pvc.ObjectMeta.GetUID()) == pvcUIDs[1] {
+			return pvc.ObjectMeta.GetName(), pvc.ObjectMeta.GetNamespace(), nil
+		}
+	}
+	return "", "", fmt.Errorf("Error PVC %s not found", pvcUIDs[1])
+}
+
+func (s *controllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateSnapshotRequest) (*csi.CreateSnapshotResponse, error) {
+
+	glog.V(4).Infof("CreateSnapshot called with request %v", *req)
+
+	// Validate arguments
+	name := req.GetName()
+	if len(name) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "CreateSnapshot name must be provided")
+	}
+	sourceVolumeId := req.GetSourceVolumeId()
+	if len(sourceVolumeId) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "CreateSnapshot sourceVolumeId must be provided")
+	}
+	_, pvId := filepath.Split(sourceVolumeId)
+	pvc, namespace, err := getPVCFromVolumeId(pvId, s.config.driver)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "Cannot find pvc bounded to " + name + " : " + err.Error())
+	}
+
+	// Backup job
+	r := newRestic()
+	job := r.resticJobBackup(pvId, pvc, namespace)
+	output, err := doResticJob(job, s.config.driver.config.KubeClient)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "Error running backup job : " + err.Error())
+	}
+
+	// Perse backup summary
+	jsonBytes := []byte(output)
+	summary := new(ResticBackupSummary)
+	err = json.Unmarshal(jsonBytes, summary)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "Error persing restic backup summary : " + err.Error())
+	}
+
+	// List job
+	job = r.resticJobListSnapshots()
+	output, err = doResticJob(job, s.config.driver.config.KubeClient)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "Error running list snapshots job : " + err.Error())
+	}
+
+	// Perse snapshot list and return
+	jsonBytes = []byte(output)
+	list := new([]ResticSnapshot)
+	err = json.Unmarshal(jsonBytes, list)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "Error persing restic snapshot : " + err.Error())
+	}
+	for _, snap := range(*list) {
+		if snap.ShortId == summary.SnapshotId {
+			snapshot, err := newCSISnapshot(&snap, summary.TotalBytesProcessed)
+			if err != nil {
+				return nil, status.Error(codes.Internal, "Error translating restic snapshot : " + err.Error())
+			}
+			return &csi.CreateSnapshotResponse{Snapshot: snapshot}, nil
+		}
+	}
+	return nil, status.Error(codes.Internal, "Snapshot not found in list")
+}
+
+func (s *controllerServer) DeleteSnapshot(ctx context.Context, req *csi.DeleteSnapshotRequest) (*csi.DeleteSnapshotResponse, error) {
+
+	glog.V(4).Infof("DeleteSnapshot called with args %+v", req)
+
+	snapshotID := req.GetSnapshotId()
+	if len(snapshotID) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "Snapshot ID not provided")
+	}
+
+	// Delete job
+	r := newRestic()
+	job := r.resticJobDelete(snapshotID)
+	output, err := doResticJob(job, s.config.driver.config.KubeClient)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "Error running delete snapshot job : " + err.Error() + " : " + output)
+	}
+
+	return &csi.DeleteSnapshotResponse{}, nil
+}
+
+func (s *controllerServer) ListSnapshots(ctx context.Context, req *csi.ListSnapshotsRequest) (*csi.ListSnapshotsResponse, error) {
+
+	glog.V(4).Infof("ListSnapshots called with args %+v", req)
+
+	// List job
+	r := newRestic()
+	job := r.resticJobListSnapshots()
+	output, err := doResticJob(job, s.config.driver.config.KubeClient)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "Error running list snapshots job : " + err.Error())
+	}
+
+	// Perse snapshot list and return
+	jsonBytes := []byte(output)
+	list := new([]ResticSnapshot)
+	err = json.Unmarshal(jsonBytes, list)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "Error persing restic backup summary : " + err.Error())
+	}
+
+	snapshotID := req.GetSnapshotId()
+
+	// find a snapshot
+	if len(snapshotID) != 0 {
+		for _, snap := range(*list) {
+			if snap.ShortId == snapshotID {
+				snapshot, err := newCSISnapshot(&snap, 0)
+				if err != nil {
+					return nil, status.Error(codes.Internal, "Error translating restic snapshot : " + err.Error())
+				}
+				return &csi.ListSnapshotsResponse{
+					Entries: []*csi.ListSnapshotsResponse_Entry{&csi.ListSnapshotsResponse_Entry{Snapshot: snapshot}},
+				}, nil
+			}
+		}
+		// Not found
+		return &csi.ListSnapshotsResponse{}, nil
+	}
+
+	// list for source volumeID or all
+	volumeId := req.GetSourceVolumeId()
+	var entries []*csi.ListSnapshotsResponse_Entry
+	for _, snap := range(*list) {
+		if len(volumeId) == 0 || volumeId == snap.GetSourceVolumeId() {
+			snapshot, err := newCSISnapshot(&snap, 0)
+			if err != nil {
+				return nil, status.Error(codes.Internal, "Error translating restic snapshot : " + err.Error())
+			}
+			entries = append(entries, &csi.ListSnapshotsResponse_Entry{Snapshot: snapshot})
+		}
+	}
+	return &csi.ListSnapshotsResponse{Entries: entries}, nil
+}
+
 ///// Not implemented methods
 
 func (s *controllerServer) ControllerPublishVolume(ctx context.Context, req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
@@ -562,18 +718,6 @@ func (s *controllerServer) GetCapacity(ctx context.Context, req *csi.GetCapacity
 	// https://cloud.google.com/compute/quotas
 	// DISKS_TOTAL_GB.
 	return nil, status.Error(codes.Unimplemented, "")
-}
-
-func (s *controllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateSnapshotRequest) (*csi.CreateSnapshotResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "CreateSnapshot unsupported")
-}
-
-func (s *controllerServer) DeleteSnapshot(ctx context.Context, req *csi.DeleteSnapshotRequest) (*csi.DeleteSnapshotResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "DeleteSnapshot unsupported")
-}
-
-func (s *controllerServer) ListSnapshots(ctx context.Context, req *csi.ListSnapshotsRequest) (*csi.ListSnapshotsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "ListSnapshots unsupported")
 }
 
 func (s *controllerServer) ControllerExpandVolume(ctx context.Context, req *csi.ControllerExpandVolumeRequest) (*csi.ControllerExpandVolumeResponse, error) {
