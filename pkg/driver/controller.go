@@ -583,9 +583,19 @@ func (s *controllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateSn
 	}
 
 	// Backup job
-	r := newRestic()
-	job := r.resticJobBackup(pvId, pvc, namespace)
-	output, err := doResticJob(job, s.config.driver.config.KubeClient)
+	r, err := newRestic()
+	if err != nil {
+		return nil, status.Error(codes.Internal, "Error configure restic job : " + err.Error())
+	}
+	// Get kube-system UID for cluster ID
+	clusterUID, err := getNamespaceUID("kube-system", s.config.driver)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "Error getting namespace UID : " + err.Error())
+	}
+	clusterUID = "cluster-" + clusterUID
+	job := r.resticJobBackup(pvId, pvc, namespace, clusterUID)
+	secret := r.resticPassword(job.GetNamespace())
+	output, err := doResticJob(job, secret, s.config.driver.config.KubeClient)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "Error running backup job : " + err.Error())
 	}
@@ -595,12 +605,13 @@ func (s *controllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateSn
 	summary := new(ResticBackupSummary)
 	err = json.Unmarshal(jsonBytes, summary)
 	if err != nil {
-		return nil, status.Error(codes.Internal, "Error persing restic backup summary : " + err.Error())
+		return nil, status.Error(codes.Internal, "Error persing restic backup summary : " + err.Error() + " : " + output)
 	}
 
 	// List job
 	job = r.resticJobListSnapshots()
-	output, err = doResticJob(job, s.config.driver.config.KubeClient)
+	secret = r.resticPassword(job.GetNamespace())
+	output, err = doResticJob(job, secret, s.config.driver.config.KubeClient)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "Error running list snapshots job : " + err.Error())
 	}
@@ -610,7 +621,7 @@ func (s *controllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateSn
 	list := new([]ResticSnapshot)
 	err = json.Unmarshal(jsonBytes, list)
 	if err != nil {
-		return nil, status.Error(codes.Internal, "Error persing restic snapshot : " + err.Error())
+		return nil, status.Error(codes.Internal, "Error persing restic snapshot : " + err.Error() + " : " + output)
 	}
 	for _, snap := range(*list) {
 		if snap.ShortId == summary.SnapshotId {
@@ -634,9 +645,13 @@ func (s *controllerServer) DeleteSnapshot(ctx context.Context, req *csi.DeleteSn
 	}
 
 	// Delete job
-	r := newRestic()
+	r, err := newRestic()
+	if err != nil {
+		return nil, status.Error(codes.Internal, "Error configure restic job : " + err.Error())
+	}
 	job := r.resticJobDelete(snapshotID)
-	output, err := doResticJob(job, s.config.driver.config.KubeClient)
+	secret := r.resticPassword(job.GetNamespace())
+	output, err := doResticJob(job, secret, s.config.driver.config.KubeClient)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "Error running delete snapshot job : " + err.Error() + " : " + output)
 	}
@@ -649,11 +664,15 @@ func (s *controllerServer) ListSnapshots(ctx context.Context, req *csi.ListSnaps
 	glog.V(4).Infof("ListSnapshots called with args %+v", req)
 
 	// List job
-	r := newRestic()
-	job := r.resticJobListSnapshots()
-	output, err := doResticJob(job, s.config.driver.config.KubeClient)
+	r, err := newRestic()
 	if err != nil {
-		return nil, status.Error(codes.Internal, "Error running list snapshots job : " + err.Error())
+		return nil, status.Error(codes.Internal, "Error configure restic job : " + err.Error())
+	}
+	job := r.resticJobListSnapshots()
+	secret := r.resticPassword(job.GetNamespace())
+	output, err := doResticJob(job, secret, s.config.driver.config.KubeClient)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "Error running list snapshots job : " + err.Error() + " : " + output)
 	}
 
 	// Perse snapshot list and return
@@ -661,7 +680,7 @@ func (s *controllerServer) ListSnapshots(ctx context.Context, req *csi.ListSnaps
 	list := new([]ResticSnapshot)
 	err = json.Unmarshal(jsonBytes, list)
 	if err != nil {
-		return nil, status.Error(codes.Internal, "Error persing restic backup summary : " + err.Error())
+		return nil, status.Error(codes.Internal, "Error persing restic backup summary : " + err.Error() + " : " + output)
 	}
 
 	snapshotID := req.GetSnapshotId()

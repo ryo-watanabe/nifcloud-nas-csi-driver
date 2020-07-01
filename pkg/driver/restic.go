@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"bufio"
 	"time"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -44,7 +45,7 @@ type ResticBackupSummary struct {
 	DataAdded int64 `json:"data_added"`
 	TotalFilesProcessed int64 `json:"total_files_processed"`
 	TotalBytesProcessed int64 `json:"total_bytes_processed"`
-	TotalDuration int64 `json:"total_duration"`
+	TotalDuration float64 `json:"total_duration"`
 	SnapshotId string `json:"snapshot_id"`
 }
 
@@ -75,32 +76,53 @@ func newCSISnapshot(snapshot *ResticSnapshot, sizeBytes int64) (*csi.Snapshot, e
 
 type restic struct {
 	bucket string
-	pw_secret string
-	cloud_cred_secret string
+	pw string
+	accesskey string
+	secretkey string
 	s3_host string
 }
 
-func newRestic() *restic {
+func newRestic() (*restic, error) {
+
+	// Get credentials
+	accesskey := os.Getenv("AWS_ACCESS_KEY_ID")
+	if accesskey == "" {
+		return nil, fmt.Errorf("Cannot set accesskey from env.")
+	}
+	secretkey := os.Getenv("AWS_SECRET_ACCESS_KEY")
+	if secretkey == "" {
+		return nil, fmt.Errorf("Cannot set secretkey from env.")
+	}
+
 	return &restic{
 		bucket: "restic-test",
-		pw_secret: "restic-password",
-		cloud_cred_secret: "jp-east2-cred",
+		pw: "restictest",
+		accesskey: accesskey,
+		secretkey: secretkey,
 		s3_host: "jp-east-2.storage.api.nifcloud.com",
-	}
+	}, nil
 }
 
 // execute restic Job with backing off
-func doResticJob(job *batchv1.Job, kubeClient kubernetes.Interface) (string, error) {
+func doResticJob(job *batchv1.Job, secret *corev1.Secret, kubeClient kubernetes.Interface) (string, error) {
 
 	name := job.GetName()
 	namespace := job.GetNamespace()
 
+	// Create Secret
+	_, err := kubeClient.CoreV1().Secrets(namespace).Create(secret)
+	if err != nil {
+		return "", fmt.Errorf("Creating restic password secret error - %s", err.Error())
+	}
+	defer kubeClient.CoreV1().Secrets(namespace).Delete(secret.GetName(), &metav1.DeleteOptions{})
+
 	// Create job
-	_, err := kubeClient.BatchV1().Jobs(namespace).Create(job)
+	_, err = kubeClient.BatchV1().Jobs(namespace).Create(job)
 	if err != nil {
 		return "", fmt.Errorf("Creating restic job error - %s", err.Error())
 	}
-	defer kubeClient.BatchV1().Jobs(namespace).Delete(name, &metav1.DeleteOptions{})
+	var dp metav1.DeletionPropagation = metav1.DeletePropagationForeground
+	defer kubeClient.BatchV1().Jobs(namespace).Delete(name, &metav1.DeleteOptions{PropagationPolicy:&dp})
 
 	// wait for job completed with backoff retry
 	b := backoff.NewExponentialBackOff()
@@ -146,7 +168,10 @@ func doResticJob(job *batchv1.Job, kubeClient kubernetes.Interface) (string, err
 			out := ""
 			for {
 				line, err := reader.ReadString('\n')
-				out = line
+				//fmt.Println("[LINE]:" + line)
+				if line != "" {
+					out = line
+				}
 				if err != nil || strings.Contains(out, "summary") {
 					break
 				}
@@ -174,11 +199,11 @@ func (r *restic) resticJobListSnapshots() *batchv1.Job {
 }
 
 // restic backup
-func (r *restic) resticJobBackup(volumeId, pvc, namespace string) *batchv1.Job {
+func (r *restic) resticJobBackup(volumeId, pvc, namespace, clusterUID string) *batchv1.Job {
 	job := r.resticJob("restic-job-backup-" + volumeId, namespace)
 	job.Spec.Template.Spec.Containers[0].Args = append(
 		job.Spec.Template.Spec.Containers[0].Args,
-		[]string{"backup", "--json", "/pv/" + volumeId}...,
+		[]string{"backup", "--json", "--tag", clusterUID, "/pv/" + volumeId}...,
 	)
 	volume := corev1.Volume{
 		Name: "pvc",
@@ -198,6 +223,7 @@ func (r *restic) resticJobBackup(volumeId, pvc, namespace string) *batchv1.Job {
 		job.Spec.Template.Spec.Containers[0].VolumeMounts,
 		volumeMount,
 	)
+	job.Spec.Template.Spec.Hostname = "restic-backup-job"
 	return job
 }
 
@@ -206,14 +232,27 @@ func (r *restic) resticJobDelete(snapshotId string) *batchv1.Job {
 	job := r.resticJob("restic-job-delete-" + snapshotId, "default")
 	job.Spec.Template.Spec.Containers[0].Args = append(
 		job.Spec.Template.Spec.Containers[0].Args,
-		[]string{"forget", snapshotId}...,
+		[]string{"forget", "--prune", snapshotId}...,
 	)
 	return job
 }
 
-// restic job pod
-func (r *restic) resticJob(name, namespace  string) *batchv1.Job {
+func (r *restic) resticPassword(namespace string) *corev1.Secret {
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "restic-password",
+			Namespace: namespace,
+		},
+		Data: map[string][]byte{
+			"password": []byte(r.pw),
+		},
+	}
+}
 
+// restic job pod
+func (r *restic) resticJob(name, namespace string) *batchv1.Job {
+
+	backoffLimit := int32(2)
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
@@ -234,26 +273,12 @@ func (r *restic) resticJob(name, namespace  string) *batchv1.Job {
 							},
 							Env: []corev1.EnvVar{
 								{
-									Name: "AWS_SECRET_ACCESS_KEY",
-									ValueFrom: &corev1.EnvVarSource{
-										SecretKeyRef: &corev1.SecretKeySelector{
-											LocalObjectReference: corev1.LocalObjectReference{
-												Name: r.cloud_cred_secret,
-											},
-											Key: "accesskey",
-										},
-									},
+									Name: "AWS_ACCESS_KEY_ID",
+									Value: r.accesskey,
 								},
 								{
-									Name: "AWS_SECRET_SECRET_KEY",
-									ValueFrom: &corev1.EnvVarSource{
-										SecretKeyRef: &corev1.SecretKeySelector{
-											LocalObjectReference: corev1.LocalObjectReference{
-												Name: r.cloud_cred_secret,
-											},
-											Key: "secretkey",
-										},
-									},
+									Name: "AWS_SECRET_ACCESS_KEY",
+									Value: r.secretkey,
 								},
 								{
 									Name: "RESTIC_PASSWORD_FILE",
@@ -271,7 +296,7 @@ func (r *restic) resticJob(name, namespace  string) *batchv1.Job {
 							Name: "restic-pw",
 							VolumeSource: corev1.VolumeSource{
 								Secret: &corev1.SecretVolumeSource{
-									SecretName: r.pw_secret,
+									SecretName: "restic-password",
 								},
 							},
 						},
@@ -279,6 +304,7 @@ func (r *restic) resticJob(name, namespace  string) *batchv1.Job {
 					RestartPolicy: "Never",
 				},
 			},
+			BackoffLimit: &backoffLimit,
 		},
 	}
 }

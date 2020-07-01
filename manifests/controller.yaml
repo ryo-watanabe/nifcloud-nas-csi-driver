@@ -41,6 +41,7 @@ spec:
         - name: csi-snapshotter
           image: quay.io/k8scsi/csi-snapshotter:v2.1.1
           args:
+            - "--timeout=30m"
             - "--v=4"
             - "--csi-address=/csi/csi.sock"
             #- --leader-election=true
