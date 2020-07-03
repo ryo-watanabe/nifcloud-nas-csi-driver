@@ -12,6 +12,7 @@ import (
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/golang/protobuf/ptypes"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -111,17 +112,24 @@ func doResticJob(job *batchv1.Job, secret *corev1.Secret, kubeClient kubernetes.
 
 	// Create Secret
 	_, err := kubeClient.CoreV1().Secrets(namespace).Create(secret)
-	if err != nil {
+	if err != nil && !errors.IsAlreadyExists(err) {
 		return "", fmt.Errorf("Creating restic password secret error - %s", err.Error())
 	}
 	defer kubeClient.CoreV1().Secrets(namespace).Delete(secret.GetName(), &metav1.DeleteOptions{})
 
 	// Create job
+	var dp metav1.DeletionPropagation = metav1.DeletePropagationForeground
 	_, err = kubeClient.BatchV1().Jobs(namespace).Create(job)
 	if err != nil {
-		return "", fmt.Errorf("Creating restic job error - %s", err.Error())
+		if !errors.IsAlreadyExists(err) {
+			return "", fmt.Errorf("Creating restic job error - %s", err.Error())
+		}
+		kubeClient.BatchV1().Jobs(namespace).Delete(name, &metav1.DeleteOptions{PropagationPolicy:&dp})
+		_, err = kubeClient.BatchV1().Jobs(namespace).Create(job)
+		if err != nil {
+			return "", fmt.Errorf("Re-creating restic job error - %s", err.Error())
+		}
 	}
-	var dp metav1.DeletionPropagation = metav1.DeletePropagationForeground
 	defer kubeClient.BatchV1().Jobs(namespace).Delete(name, &metav1.DeleteOptions{PropagationPolicy:&dp})
 
 	// wait for job completed with backoff retry
@@ -203,7 +211,7 @@ func (r *restic) resticJobBackup(volumeId, pvc, namespace, clusterUID string) *b
 	job := r.resticJob("restic-job-backup-" + volumeId, namespace)
 	job.Spec.Template.Spec.Containers[0].Args = append(
 		job.Spec.Template.Spec.Containers[0].Args,
-		[]string{"backup", "--json", "--tag", clusterUID, "/pv/" + volumeId}...,
+		[]string{"backup", "--json", "--tag", clusterUID, "/" + volumeId}...,
 	)
 	volume := corev1.Volume{
 		Name: "pvc",
@@ -216,7 +224,7 @@ func (r *restic) resticJobBackup(volumeId, pvc, namespace, clusterUID string) *b
 	job.Spec.Template.Spec.Volumes = append(job.Spec.Template.Spec.Volumes, volume)
 	volumeMount := corev1.VolumeMount{
 		Name: "pvc",
-		MountPath: "/pv/" + volumeId,
+		MountPath: "/" + volumeId,
 		ReadOnly: true,
 	}
 	job.Spec.Template.Spec.Containers[0].VolumeMounts = append(
@@ -234,6 +242,38 @@ func (r *restic) resticJobDelete(snapshotId string) *batchv1.Job {
 		job.Spec.Template.Spec.Containers[0].Args,
 		[]string{"forget", "--prune", snapshotId}...,
 	)
+	return job
+}
+
+// restic restore
+func (r *restic) resticJobRestore(snapId, restoreTarget, nodeName string) *batchv1.Job {
+	job := r.resticJob("restic-job-restore-" + snapId, "default")
+	job.Spec.Template.Spec.Containers[0].Args = append(
+		job.Spec.Template.Spec.Containers[0].Args,
+		[]string{"restore", "-t", restoreTarget, snapId}...,
+	)
+	hpType := corev1.HostPathDirectory
+	volume := corev1.Volume{
+		Name: "restore-target",
+		VolumeSource: corev1.VolumeSource{
+			HostPath: &corev1.HostPathVolumeSource{
+				Path: restoreTarget,
+				Type: &hpType,
+			},
+		},
+	}
+	job.Spec.Template.Spec.Volumes = append(job.Spec.Template.Spec.Volumes, volume)
+	volumeMount := corev1.VolumeMount{
+		Name: "restore-target",
+		MountPath: restoreTarget,
+	}
+	job.Spec.Template.Spec.Containers[0].VolumeMounts = append(
+		job.Spec.Template.Spec.Containers[0].VolumeMounts,
+		volumeMount,
+	)
+	job.Spec.Template.Spec.NodeSelector = map[string]string{
+		"kubernetes.io/hostname": nodeName,
+	}
 	return job
 }
 

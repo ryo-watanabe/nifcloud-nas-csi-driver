@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"fmt"
+	"os"
 	"time"
 	"strconv"
 	"strings"
@@ -35,6 +36,7 @@ import (
 
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/kubernetes/pkg/util/mount"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 
 	"github.com/aokumasan/nifcloud-sdk-go-v2/service/nas"
@@ -231,6 +233,20 @@ func (s *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 	}
 	nasInput.NASSecurityGroups = []string{securityGroupName}
 
+	// Check volume source for snapshots
+	snapshotId := ""
+	volumeSource := req.GetVolumeContentSource()
+	if volumeSource != nil {
+		if _, ok := volumeSource.GetType().(*csi.VolumeContentSource_Snapshot); !ok {
+			return nil, status.Error(codes.InvalidArgument, "Unsupported volumeContentSource type")
+		}
+		sourceSnapshot := volumeSource.GetSnapshot()
+		if sourceSnapshot == nil {
+			return nil, status.Error(codes.InvalidArgument, "Error retrieving snapshot from the volumeContentSource")
+		}
+		snapshotId = sourceSnapshot.GetSnapshotId()
+	}
+
 	// Check if the instance already exists
 	n, err := s.config.cloud.GetNasInstance(ctx, name)
 	if err != nil && !cloud.IsNotFoundErr(err) {
@@ -341,6 +357,23 @@ func (s *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 
 	vol := s.nasInstanceToCSIVolume(n, req)
 	glog.V(4).Infof("Volume created: %v", vol)
+
+	// Restoring from snapshot
+	if snapshotId != "" {
+		err = s.restoreSnapshot(snapshotId, vol)
+		if err != nil {
+			err = status.Error(codes.Internal, "error restoring volume contents from snapshot" + err.Error())
+			return
+		}
+		vol.ContentSource = &csi.VolumeContentSource{
+			Type: &csi.VolumeContentSource_Snapshot{
+				Snapshot: &csi.VolumeContentSource_SnapshotSource{
+					SnapshotId: snapshotId,
+				},
+			},
+		}
+		glog.V(4).Infof("Volume successfully restored from snapshot %s", snapshotId)
+	}
 
 	res = &csi.CreateVolumeResponse{Volume: vol}
 	err = nil
@@ -616,31 +649,37 @@ func (s *controllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateSn
 		return nil, status.Error(codes.Internal, "Error running list snapshots job : " + err.Error())
 	}
 
-	// Perse snapshot list and return
+	// Perse snapshot list
 	jsonBytes = []byte(output)
 	list := new([]ResticSnapshot)
 	err = json.Unmarshal(jsonBytes, list)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "Error persing restic snapshot : " + err.Error() + " : " + output)
 	}
+	var snapshot *csi.Snapshot = nil
 	for _, snap := range(*list) {
 		if snap.ShortId == summary.SnapshotId {
-			snapshot, err := newCSISnapshot(&snap, summary.TotalBytesProcessed)
+			snapshot, err = newCSISnapshot(&snap, summary.TotalBytesProcessed)
 			if err != nil {
 				return nil, status.Error(codes.Internal, "Error translating restic snapshot : " + err.Error())
 			}
-			return &csi.CreateSnapshotResponse{Snapshot: snapshot}, nil
 		}
 	}
-	return nil, status.Error(codes.Internal, "Snapshot not found in list")
+	if snapshot == nil {
+		return nil, status.Error(codes.Internal, "Snapshot not found in list")
+	}
+
+	glog.V(4).Infof("Snapshot %s successfully created from volume %s", snapshot.SnapshotId, sourceVolumeId)
+
+	return &csi.CreateSnapshotResponse{Snapshot: snapshot}, nil
 }
 
 func (s *controllerServer) DeleteSnapshot(ctx context.Context, req *csi.DeleteSnapshotRequest) (*csi.DeleteSnapshotResponse, error) {
 
 	glog.V(4).Infof("DeleteSnapshot called with args %+v", req)
 
-	snapshotID := req.GetSnapshotId()
-	if len(snapshotID) == 0 {
+	snapshotId := req.GetSnapshotId()
+	if len(snapshotId) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "Snapshot ID not provided")
 	}
 
@@ -649,12 +688,14 @@ func (s *controllerServer) DeleteSnapshot(ctx context.Context, req *csi.DeleteSn
 	if err != nil {
 		return nil, status.Error(codes.Internal, "Error configure restic job : " + err.Error())
 	}
-	job := r.resticJobDelete(snapshotID)
+	job := r.resticJobDelete(snapshotId)
 	secret := r.resticPassword(job.GetNamespace())
 	output, err := doResticJob(job, secret, s.config.driver.config.KubeClient)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "Error running delete snapshot job : " + err.Error() + " : " + output)
 	}
+
+	glog.V(4).Infof("Snapshot %s successfully deleted", snapshotId)
 
 	return &csi.DeleteSnapshotResponse{}, nil
 }
@@ -715,6 +756,70 @@ func (s *controllerServer) ListSnapshots(ctx context.Context, req *csi.ListSnaps
 		}
 	}
 	return &csi.ListSnapshotsResponse{Entries: entries}, nil
+}
+
+func (s *controllerServer) restoreSnapshot(snapshotId string, vol *csi.Volume) error {
+
+	r, err := newRestic()
+	if err != nil {
+		return fmt.Errorf("Error configure restic job : %s", err.Error())
+	}
+	// List job
+	job := r.resticJobListSnapshots()
+	secret := r.resticPassword(job.GetNamespace())
+	output, err := doResticJob(job, secret, s.config.driver.config.KubeClient)
+	if err != nil {
+		return fmt.Errorf("Error running list snapshots job : %s", err.Error())
+	}
+
+	// Perse snapshot list and return
+	jsonBytes := []byte(output)
+	list := new([]ResticSnapshot)
+	err = json.Unmarshal(jsonBytes, list)
+	if err != nil {
+		return fmt.Errorf("Error persing restic snapshot : %s : %s", err.Error(), output)
+	}
+	var snap *ResticSnapshot = nil
+	for _, snp := range(*list) {
+		if snp.ShortId == snapshotId {
+			snap = &snp
+			break
+		}
+	}
+	if snap == nil {
+		return fmt.Errorf("Snapshot not found in list")
+	}
+
+	snapPath := snap.GetSourceVolumeId()
+
+	// Mount point
+	mountPoint := filepath.Join("tmp", snapPath)
+	err = os.MkdirAll(mountPoint, 0755)
+	if err != nil {
+		return fmt.Errorf("Error making mount point ", mountPoint)
+	}
+	defer os.RemoveAll(mountPoint)
+
+	// Mount
+	mounter := mount.New("")
+	source := fmt.Sprintf("%s:/%s", vol.VolumeContext[attrIp], vol.VolumeContext[attrSourcePath])
+	fstype := "nfs"
+	options := []string{}
+	err = mounter.Mount(source, mountPoint, fstype, options)
+	if err != nil {
+		return fmt.Errorf("Mount error : %s", err.Error())
+	}
+	defer mounter.Unmount(mountPoint)
+
+	// Restore job
+	job = r.resticJobRestore(snapshotId, "/tmp/", s.config.driver.config.NodeID)
+	secret = r.resticPassword(job.GetNamespace())
+	output, err = doResticJob(job, secret, s.config.driver.config.KubeClient)
+	if err != nil {
+		return fmt.Errorf("Error running restore snapshot job : %s : %s", err.Error(), output)
+	}
+
+	return nil
 }
 
 ///// Not implemented methods

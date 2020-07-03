@@ -76,6 +76,13 @@ spec:
           volumeMounts:
             - name: socket-dir
               mountPath: /csi
+            - name: host-tmp
+              mountPath: /tmp
+              mountPropagation: "Bidirectional"
       volumes:
+        - name: host-tmp
+          hostPath:
+            path: /tmp
+            type: Directory
         - name: socket-dir
           emptyDir: {}
