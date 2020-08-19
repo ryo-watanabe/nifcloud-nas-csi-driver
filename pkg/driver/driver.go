@@ -28,6 +28,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"github.com/cenkalti/backoff"
+	clientset "github.com/kubernetes-csi/external-snapshotter/v2/pkg/client/clientset/versioned"
 
 	"github.com/ryo-watanabe/nfcl-nas-csi-driver/pkg/cloud"
 )
@@ -41,6 +42,7 @@ type NifcloudNasDriverConfig struct {
 	Mounter       mount.Interface // Mount library
 	Cloud         *cloud.Cloud    // Cloud provider
 	KubeClient    kubernetes.Interface  // k8s client
+	SnapClient    clientset.Interface  // snapshot client
 }
 
 type NifcloudNasDriver struct {

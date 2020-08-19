@@ -616,7 +616,7 @@ func (s *controllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateSn
 	}
 
 	// Backup job
-	r, err := newRestic()
+	r, err := newRestic(req.GetSecrets())
 	if err != nil {
 		return nil, status.Error(codes.Internal, "Error configure restic job : " + err.Error())
 	}
@@ -627,8 +627,7 @@ func (s *controllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateSn
 	}
 	clusterUID = "cluster-" + clusterUID
 	job := r.resticJobBackup(pvId, pvc, namespace, clusterUID)
-	secret := r.resticPassword(job.GetNamespace())
-	output, err := doResticJob(job, secret, s.config.driver.config.KubeClient)
+	output, err := doResticJob(job, s.config.driver.config.KubeClient)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "Error running backup job : " + err.Error())
 	}
@@ -643,8 +642,7 @@ func (s *controllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateSn
 
 	// List job
 	job = r.resticJobListSnapshots()
-	secret = r.resticPassword(job.GetNamespace())
-	output, err = doResticJob(job, secret, s.config.driver.config.KubeClient)
+	output, err = doResticJob(job, s.config.driver.config.KubeClient)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "Error running list snapshots job : " + err.Error())
 	}
@@ -684,13 +682,12 @@ func (s *controllerServer) DeleteSnapshot(ctx context.Context, req *csi.DeleteSn
 	}
 
 	// Delete job
-	r, err := newRestic()
+	r, err := newRestic(req.GetSecrets())
 	if err != nil {
 		return nil, status.Error(codes.Internal, "Error configure restic job : " + err.Error())
 	}
 	job := r.resticJobDelete(snapshotId)
-	secret := r.resticPassword(job.GetNamespace())
-	output, err := doResticJob(job, secret, s.config.driver.config.KubeClient)
+	output, err := doResticJob(job, s.config.driver.config.KubeClient)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "Error running delete snapshot job : " + err.Error() + " : " + output)
 	}
@@ -705,13 +702,12 @@ func (s *controllerServer) ListSnapshots(ctx context.Context, req *csi.ListSnaps
 	glog.V(4).Infof("ListSnapshots called with args %+v", req)
 
 	// List job
-	r, err := newRestic()
+	r, err := newRestic(req.GetSecrets())
 	if err != nil {
 		return nil, status.Error(codes.Internal, "Error configure restic job : " + err.Error())
 	}
 	job := r.resticJobListSnapshots()
-	secret := r.resticPassword(job.GetNamespace())
-	output, err := doResticJob(job, secret, s.config.driver.config.KubeClient)
+	output, err := doResticJob(job, s.config.driver.config.KubeClient)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "Error running list snapshots job : " + err.Error() + " : " + output)
 	}
@@ -758,16 +754,67 @@ func (s *controllerServer) ListSnapshots(ctx context.Context, req *csi.ListSnaps
 	return &csi.ListSnapshotsResponse{Entries: entries}, nil
 }
 
+// Get snapshotclass secrets from snapshotID
+func getSecretsFromSnapshotId(snapshotId string, driver *NifcloudNasDriver) (map[string]string, error) {
+
+	m := make(map[string]string)
+
+	snapClient := driver.config.SnapClient
+	kubeClient := driver.config.KubeClient
+	contents, err := snapClient.SnapshotV1beta1().VolumeSnapshotContents().List(metav1.ListOptions{})
+	if err != nil {
+		return m, fmt.Errorf("Error getting volumesnapshotcontents list : %s", err.Error())
+	}
+	className := ""
+	for _, c := range contents.Items {
+		if *c.Status.SnapshotHandle == snapshotId {
+			className = *c.Spec.VolumeSnapshotClassName
+			break
+		}
+	}
+	if className == "" {
+		return m, fmt.Errorf("Error snapshotId %d not found in volumesnapshotcontents : %s", snapshotId, err.Error())
+	}
+	class, err := snapClient.SnapshotV1beta1().VolumeSnapshotClasses().Get(className, metav1.GetOptions{})
+	if err != nil {
+		return m, fmt.Errorf("Error getting volumesnapshotclass %s : %s", className, err.Error())
+	}
+	if class.Parameters["csi.storage.k8s.io/snapshotter-secret-name"] == "" {
+		return m, fmt.Errorf("Error csi.storage.k8s.io/snapshotter-secret-name not found in parameter of volumesnapshotclass")
+	}
+	if class.Parameters["csi.storage.k8s.io/snapshotter-secret-namespace"] == "" {
+		return m, fmt.Errorf("Error csi.storage.k8s.io/snapshotter-secret-namespace not found in parameter of volumesnapshotclass")
+	}
+	secret, err := kubeClient.CoreV1().Secrets(
+		class.Parameters["csi.storage.k8s.io/snapshotter-secret-namespace"],
+		).Get(
+			class.Parameters["csi.storage.k8s.io/snapshotter-secret-name"],
+			metav1.GetOptions{},
+		)
+	if err != nil {
+		return m, fmt.Errorf("Error getting secret : %s", err.Error())
+	}
+	for key, value := range secret.Data {
+		m[key] = string(value)
+	}
+	return m, nil
+}
+
 func (s *controllerServer) restoreSnapshot(snapshotId string, vol *csi.Volume) error {
 
-	r, err := newRestic()
+	// Get secrets
+	secrets, err := getSecretsFromSnapshotId(snapshotId, s.config.driver)
+	if err != nil {
+		return fmt.Errorf("Error getting secrets for %s : %s", snapshotId, err.Error())
+	}
+
+	r, err := newRestic(secrets)
 	if err != nil {
 		return fmt.Errorf("Error configure restic job : %s", err.Error())
 	}
 	// List job
 	job := r.resticJobListSnapshots()
-	secret := r.resticPassword(job.GetNamespace())
-	output, err := doResticJob(job, secret, s.config.driver.config.KubeClient)
+	output, err := doResticJob(job, s.config.driver.config.KubeClient)
 	if err != nil {
 		return fmt.Errorf("Error running list snapshots job : %s", err.Error())
 	}
@@ -813,8 +860,7 @@ func (s *controllerServer) restoreSnapshot(snapshotId string, vol *csi.Volume) e
 
 	// Restore job
 	job = r.resticJobRestore(snapshotId, "/tmp/", s.config.driver.config.NodeID)
-	secret = r.resticPassword(job.GetNamespace())
-	output, err = doResticJob(job, secret, s.config.driver.config.KubeClient)
+	output, err = doResticJob(job, s.config.driver.config.KubeClient)
 	if err != nil {
 		return fmt.Errorf("Error running restore snapshot job : %s : %s", err.Error(), output)
 	}

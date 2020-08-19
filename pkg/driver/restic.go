@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"bufio"
 	"time"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -76,50 +75,46 @@ func newCSISnapshot(snapshot *ResticSnapshot, sizeBytes int64) (*csi.Snapshot, e
 }
 
 type restic struct {
-	bucket string
 	pw string
 	accesskey string
 	secretkey string
-	s3_host string
+	repository string
+	image string
 }
 
-func newRestic() (*restic, error) {
+func newRestic(secrets map[string]string) (*restic, error) {
 
-	// Get credentials
-	accesskey := os.Getenv("AWS_ACCESS_KEY_ID")
-	if accesskey == "" {
-		return nil, fmt.Errorf("Cannot set accesskey from env.")
+	if secrets["accesskey"] == "" {
+		return nil, fmt.Errorf("'accesskey' not found in restic secrets")
 	}
-	secretkey := os.Getenv("AWS_SECRET_ACCESS_KEY")
-	if secretkey == "" {
-		return nil, fmt.Errorf("Cannot set secretkey from env.")
+	if secrets["secretkey"] == "" {
+		return nil, fmt.Errorf("'secretkey' not found in restic secrets")
+	}
+	if secrets["resticRepository"] == "" {
+		return nil, fmt.Errorf("'resticRepository' not found in restic secrets")
+	}
+	if secrets["resticPassword"] == "" {
+		return nil, fmt.Errorf("'resticPassword' not found in restic secrets")
 	}
 
 	return &restic{
-		bucket: "restic-test",
-		pw: "restictest",
-		accesskey: accesskey,
-		secretkey: secretkey,
-		s3_host: "jp-east-2.storage.api.nifcloud.com",
+		pw: secrets["resticPassword"],
+		accesskey: secrets["accesskey"],
+		secretkey: secrets["secretkey"],
+		repository: secrets["resticRepository"],
+		image: "fj3817ia/restic-scratch:0.9.6b",
 	}, nil
 }
 
 // execute restic Job with backing off
-func doResticJob(job *batchv1.Job, secret *corev1.Secret, kubeClient kubernetes.Interface) (string, error) {
+func doResticJob(job *batchv1.Job, kubeClient kubernetes.Interface) (string, error) {
 
 	name := job.GetName()
 	namespace := job.GetNamespace()
 
-	// Create Secret
-	_, err := kubeClient.CoreV1().Secrets(namespace).Create(secret)
-	if err != nil && !errors.IsAlreadyExists(err) {
-		return "", fmt.Errorf("Creating restic password secret error - %s", err.Error())
-	}
-	defer kubeClient.CoreV1().Secrets(namespace).Delete(secret.GetName(), &metav1.DeleteOptions{})
-
 	// Create job
 	var dp metav1.DeletionPropagation = metav1.DeletePropagationForeground
-	_, err = kubeClient.BatchV1().Jobs(namespace).Create(job)
+	_, err := kubeClient.BatchV1().Jobs(namespace).Create(job)
 	if err != nil {
 		if !errors.IsAlreadyExists(err) {
 			return "", fmt.Errorf("Creating restic job error - %s", err.Error())
@@ -277,18 +272,6 @@ func (r *restic) resticJobRestore(snapId, restoreTarget, nodeName string) *batch
 	return job
 }
 
-func (r *restic) resticPassword(namespace string) *corev1.Secret {
-	return &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "restic-password",
-			Namespace: namespace,
-		},
-		Data: map[string][]byte{
-			"password": []byte(r.pw),
-		},
-	}
-}
-
 // restic job pod
 func (r *restic) resticJob(name, namespace string) *batchv1.Job {
 
@@ -304,13 +287,7 @@ func (r *restic) resticJob(name, namespace string) *batchv1.Job {
 					Containers: []corev1.Container{
 						{
 							Name:  name,
-							Image: "restic/restic",
-							VolumeMounts: []corev1.VolumeMount{
-								{
-									Name:      "restic-pw",
-									MountPath: "/etc/restic",
-								},
-							},
+							Image: r.image,
 							Env: []corev1.EnvVar{
 								{
 									Name: "AWS_ACCESS_KEY_ID",
@@ -321,22 +298,12 @@ func (r *restic) resticJob(name, namespace string) *batchv1.Job {
 									Value: r.secretkey,
 								},
 								{
-									Name: "RESTIC_PASSWORD_FILE",
-									Value: "/etc/restic/password",
+									Name: "RESTIC_PASSWORD",
+									Value: r.pw,
 								},
 								{
 									Name: "RESTIC_REPOSITORY",
-									Value: "s3:" + r.s3_host + "/" + r.bucket,
-								},
-							},
-						},
-					},
-					Volumes: []corev1.Volume{
-						{
-							Name: "restic-pw",
-							VolumeSource: corev1.VolumeSource{
-								Secret: &corev1.SecretVolumeSource{
-									SecretName: "restic-password",
+									Value: r.repository,
 								},
 							},
 						},

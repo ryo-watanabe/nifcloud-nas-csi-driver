@@ -26,6 +26,7 @@ import (
 	"k8s.io/kubernetes/pkg/util/mount"
 	"github.com/ryo-watanabe/nfcl-nas-csi-driver/pkg/cloud"
 	"github.com/ryo-watanabe/nfcl-nas-csi-driver/pkg/driver"
+	clientset "github.com/kubernetes-csi/external-snapshotter/v2/pkg/client/clientset/versioned"
 )
 
 var (
@@ -55,6 +56,10 @@ func main() {
 	if err != nil {
 		glog.Fatalf("Error building kubernetes clientset: %s", err.Error())
 	}
+	snapClient, err := clientset.NewForConfig(cfg)
+	if err != nil {
+		glog.Fatalf("Error building snapshot clientset: %s", err.Error())
+	}
 
 	var provider *cloud.Cloud
 	if *runController {
@@ -73,6 +78,7 @@ func main() {
 		Mounter:       mounter,
 		Cloud:         provider,
 		KubeClient:    kubeClient,
+		SnapClient:    snapClient,
 	}
 
 	nfnsDriver, err := driver.NewNifcloudNasDriver(config)
