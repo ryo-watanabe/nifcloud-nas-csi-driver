@@ -598,7 +598,7 @@ func getPVCFromVolumeId(volumeId string, driver *NifcloudNasDriver) (string, str
 
 func (s *controllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateSnapshotRequest) (*csi.CreateSnapshotResponse, error) {
 
-	glog.V(4).Infof("CreateSnapshot called with request %v", *req)
+	glog.V(4).Infof("CreateSnapshot called with request : Name=%s SourceVolumeID=%s", req.GetName(), req.GetSourceVolumeId())
 
 	// Validate arguments
 	name := req.GetName()
@@ -626,8 +626,8 @@ func (s *controllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateSn
 		return nil, status.Error(codes.Internal, "Error getting namespace UID : " + err.Error())
 	}
 	clusterUID = "cluster-" + clusterUID
-	job := r.resticJobBackup(pvId, pvc, namespace, clusterUID)
-	output, err := doResticJob(job, s.config.driver.config.KubeClient)
+	job, secret := r.resticJobBackup(pvId, pvc, namespace, clusterUID)
+	output, err := doResticJob(job, secret, s.config.driver.config.KubeClient, 30)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "Error running backup job : " + err.Error())
 	}
@@ -641,8 +641,8 @@ func (s *controllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateSn
 	}
 
 	// List job
-	job = r.resticJobListSnapshots()
-	output, err = doResticJob(job, s.config.driver.config.KubeClient)
+	job, secret = r.resticJobListSnapshots()
+	output, err = doResticJob(job, secret, s.config.driver.config.KubeClient, 5)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "Error running list snapshots job : " + err.Error())
 	}
@@ -674,7 +674,7 @@ func (s *controllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateSn
 
 func (s *controllerServer) DeleteSnapshot(ctx context.Context, req *csi.DeleteSnapshotRequest) (*csi.DeleteSnapshotResponse, error) {
 
-	glog.V(4).Infof("DeleteSnapshot called with args %+v", req)
+	glog.V(4).Infof("DeleteSnapshot called with args : SnapshotId=%s", req.GetSnapshotId())
 
 	snapshotId := req.GetSnapshotId()
 	if len(snapshotId) == 0 {
@@ -686,8 +686,8 @@ func (s *controllerServer) DeleteSnapshot(ctx context.Context, req *csi.DeleteSn
 	if err != nil {
 		return nil, status.Error(codes.Internal, "Error configure restic job : " + err.Error())
 	}
-	job := r.resticJobDelete(snapshotId)
-	output, err := doResticJob(job, s.config.driver.config.KubeClient)
+	job, secret := r.resticJobDelete(snapshotId)
+	output, err := doResticJob(job, secret, s.config.driver.config.KubeClient, 10)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "Error running delete snapshot job : " + err.Error() + " : " + output)
 	}
@@ -699,15 +699,15 @@ func (s *controllerServer) DeleteSnapshot(ctx context.Context, req *csi.DeleteSn
 
 func (s *controllerServer) ListSnapshots(ctx context.Context, req *csi.ListSnapshotsRequest) (*csi.ListSnapshotsResponse, error) {
 
-	glog.V(4).Infof("ListSnapshots called with args %+v", req)
+	glog.V(4).Infof("ListSnapshots called with args : SnapshotId=%s", req.GetSnapshotId())
 
 	// List job
 	r, err := newRestic(req.GetSecrets())
 	if err != nil {
 		return nil, status.Error(codes.Internal, "Error configure restic job : " + err.Error())
 	}
-	job := r.resticJobListSnapshots()
-	output, err := doResticJob(job, s.config.driver.config.KubeClient)
+	job, secret := r.resticJobListSnapshots()
+	output, err := doResticJob(job, secret, s.config.driver.config.KubeClient, 5)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "Error running list snapshots job : " + err.Error() + " : " + output)
 	}
@@ -813,8 +813,8 @@ func (s *controllerServer) restoreSnapshot(snapshotId string, vol *csi.Volume) e
 		return fmt.Errorf("Error configure restic job : %s", err.Error())
 	}
 	// List job
-	job := r.resticJobListSnapshots()
-	output, err := doResticJob(job, s.config.driver.config.KubeClient)
+	job, secret := r.resticJobListSnapshots()
+	output, err := doResticJob(job, secret, s.config.driver.config.KubeClient, 5)
 	if err != nil {
 		return fmt.Errorf("Error running list snapshots job : %s", err.Error())
 	}
@@ -859,8 +859,8 @@ func (s *controllerServer) restoreSnapshot(snapshotId string, vol *csi.Volume) e
 	defer mounter.Unmount(mountPoint)
 
 	// Restore job
-	job = r.resticJobRestore(snapshotId, "/tmp/", s.config.driver.config.NodeID)
-	output, err = doResticJob(job, s.config.driver.config.KubeClient)
+	job, secret = r.resticJobRestore(snapshotId, "/tmp/", s.config.driver.config.NodeID)
+	output, err = doResticJob(job, secret, s.config.driver.config.KubeClient, 30)
 	if err != nil {
 		return fmt.Errorf("Error running restore snapshot job : %s : %s", err.Error(), output)
 	}

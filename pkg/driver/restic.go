@@ -9,6 +9,7 @@ import (
 
 	"github.com/cenkalti/backoff"
 	"github.com/container-storage-interface/spec/lib/go/csi"
+	"github.com/golang/glog"
 	"github.com/golang/protobuf/ptypes"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -106,15 +107,26 @@ func newRestic(secrets map[string]string) (*restic, error) {
 	}, nil
 }
 
+func retryNotifyRestic(err error, wait time.Duration) {
+	glog.Infof("%s : will be checked again in %.2f seconds", err.Error(), wait.Seconds())
+}
+
 // execute restic Job with backing off
-func doResticJob(job *batchv1.Job, kubeClient kubernetes.Interface) (string, error) {
+func doResticJob(job *batchv1.Job, secret *corev1.Secret, kubeClient kubernetes.Interface, initInterval int) (string, error) {
 
 	name := job.GetName()
 	namespace := job.GetNamespace()
 
+	// Create Secret
+	_, err := kubeClient.CoreV1().Secrets(namespace).Create(secret)
+	if err != nil && !errors.IsAlreadyExists(err) {
+		return "", fmt.Errorf("Creating restic secret error - %s", err.Error())
+	}
+	defer kubeClient.CoreV1().Secrets(namespace).Delete(secret.GetName(), &metav1.DeleteOptions{})
+
 	// Create job
 	var dp metav1.DeletionPropagation = metav1.DeletePropagationForeground
-	_, err := kubeClient.BatchV1().Jobs(namespace).Create(job)
+	_, err = kubeClient.BatchV1().Jobs(namespace).Create(job)
 	if err != nil {
 		if !errors.IsAlreadyExists(err) {
 			return "", fmt.Errorf("Creating restic job error - %s", err.Error())
@@ -132,7 +144,7 @@ func doResticJob(job *batchv1.Job, kubeClient kubernetes.Interface) (string, err
 	b.MaxElapsedTime = time.Duration(30) * time.Minute
 	b.RandomizationFactor = 0.2
 	b.Multiplier = 2.0
-	b.InitialInterval = 1 * time.Second
+	b.InitialInterval = time.Duration(initInterval) * time.Second
 	chkJobCompleted := func() error {
 		chkJob, err := kubeClient.BatchV1().Jobs(namespace).Get(name, metav1.GetOptions{})
 		if err != nil {
@@ -147,7 +159,7 @@ func doResticJob(job *batchv1.Job, kubeClient kubernetes.Interface) (string, err
 		}
 		return fmt.Errorf("Job %s is running", name)
 	}
-	err = backoff.RetryNotify(chkJobCompleted, b, retryNotify)
+	err = backoff.RetryNotify(chkJobCompleted, b, retryNotifyRestic)
 	if err != nil {
 		return "", fmt.Errorf("Error doing restic job - %s", err.Error())
 	}
@@ -192,17 +204,17 @@ func doResticJob(job *batchv1.Job, kubeClient kubernetes.Interface) (string, err
 }
 
 // restic snapshots
-func (r *restic) resticJobListSnapshots() *batchv1.Job {
+func (r *restic) resticJobListSnapshots() (*batchv1.Job, *corev1.Secret) {
 	job := r.resticJob("restic-job-list-snapshots", "default")
 	job.Spec.Template.Spec.Containers[0].Args = append(
 		job.Spec.Template.Spec.Containers[0].Args,
 		[]string{"snapshots", "--json"}...,
 	)
-	return job
+	return job, r.resticSecret("default")
 }
 
 // restic backup
-func (r *restic) resticJobBackup(volumeId, pvc, namespace, clusterUID string) *batchv1.Job {
+func (r *restic) resticJobBackup(volumeId, pvc, namespace, clusterUID string) (*batchv1.Job, *corev1.Secret) {
 	job := r.resticJob("restic-job-backup-" + volumeId, namespace)
 	job.Spec.Template.Spec.Containers[0].Args = append(
 		job.Spec.Template.Spec.Containers[0].Args,
@@ -227,21 +239,22 @@ func (r *restic) resticJobBackup(volumeId, pvc, namespace, clusterUID string) *b
 		volumeMount,
 	)
 	job.Spec.Template.Spec.Hostname = "restic-backup-job"
-	return job
+	return job, r.resticSecret(namespace)
 }
 
 // restic delete
-func (r *restic) resticJobDelete(snapshotId string) *batchv1.Job {
+func (r *restic) resticJobDelete(snapshotId string) (*batchv1.Job, *corev1.Secret) {
 	job := r.resticJob("restic-job-delete-" + snapshotId, "default")
 	job.Spec.Template.Spec.Containers[0].Args = append(
 		job.Spec.Template.Spec.Containers[0].Args,
 		[]string{"forget", "--prune", snapshotId}...,
 	)
-	return job
+	return job, r.resticSecret("default")
 }
 
 // restic restore
-func (r *restic) resticJobRestore(snapId, restoreTarget, nodeName string) *batchv1.Job {
+func (r *restic) resticJobRestore(snapId, restoreTarget, nodeName string) (*batchv1.Job, *corev1.Secret) {
+	// Job
 	job := r.resticJob("restic-job-restore-" + snapId, "default")
 	job.Spec.Template.Spec.Containers[0].Args = append(
 		job.Spec.Template.Spec.Containers[0].Args,
@@ -269,7 +282,25 @@ func (r *restic) resticJobRestore(snapId, restoreTarget, nodeName string) *batch
 	job.Spec.Template.Spec.NodeSelector = map[string]string{
 		"kubernetes.io/hostname": nodeName,
 	}
-	return job
+
+	return job, r.resticSecret("default")
+}
+
+const resticSecretName = "restic-secrets"
+
+func (r *restic) resticSecret(namespace string) *corev1.Secret {
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      resticSecretName,
+			Namespace: namespace,
+		},
+		Data: map[string][]byte{
+			"resticPassword": []byte(r.pw),
+			"accesskey": []byte(r.accesskey),
+			"secretkey": []byte(r.secretkey),
+			"resticRepository": []byte(r.repository),
+		},
+	}
 }
 
 // restic job pod
@@ -291,19 +322,39 @@ func (r *restic) resticJob(name, namespace string) *batchv1.Job {
 							Env: []corev1.EnvVar{
 								{
 									Name: "AWS_ACCESS_KEY_ID",
-									Value: r.accesskey,
+									ValueFrom: &corev1.EnvVarSource{
+										SecretKeyRef: &corev1.SecretKeySelector{
+											LocalObjectReference: corev1.LocalObjectReference{Name: resticSecretName},
+											Key: "accesskey",
+										},
+									},
 								},
 								{
 									Name: "AWS_SECRET_ACCESS_KEY",
-									Value: r.secretkey,
+									ValueFrom: &corev1.EnvVarSource{
+										SecretKeyRef: &corev1.SecretKeySelector{
+											LocalObjectReference: corev1.LocalObjectReference{Name: resticSecretName},
+											Key: "secretkey",
+										},
+									},
 								},
 								{
 									Name: "RESTIC_PASSWORD",
-									Value: r.pw,
+									ValueFrom: &corev1.EnvVarSource{
+										SecretKeyRef: &corev1.SecretKeySelector{
+											LocalObjectReference: corev1.LocalObjectReference{Name: resticSecretName},
+											Key: "resticPassword",
+										},
+									},
 								},
 								{
 									Name: "RESTIC_REPOSITORY",
-									Value: r.repository,
+									ValueFrom: &corev1.EnvVarSource{
+										SecretKeyRef: &corev1.SecretKeySelector{
+											LocalObjectReference: corev1.LocalObjectReference{Name: resticSecretName},
+											Key: "resticRepository",
+										},
+									},
 								},
 							},
 						},
