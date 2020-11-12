@@ -19,18 +19,9 @@ spec:
       serviceAccount: nifcloud-nas-csi-controller-sa
       hostNetwork: true
       containers:
-        - name: csi-external-attacher
-          imagePullPolicy: Always
-          image: quay.io/k8scsi/csi-attacher:v2.2.0
-          args:
-            - "--v=4"
-            - "--csi-address=/csi/csi.sock"
-          volumeMounts:
-            - name: socket-dir
-              mountPath: /csi
         - name: csi-external-provisioner
           imagePullPolicy: Always
-          image: quay.io/k8scsi/csi-provisioner:v1.5.0
+          image: k8s.gcr.io/sig-storage/csi-provisioner:v2.0.2
           args:
             - "--timeout=30m"
             - "--v=4"
@@ -39,7 +30,7 @@ spec:
             - name: socket-dir
               mountPath: /csi
         - name: csi-snapshotter
-          image: quay.io/k8scsi/csi-snapshotter:v2.1.1
+          image: k8s.gcr.io/sig-storage/csi-snapshotter:v3.0.0
           args:
             - "--timeout=30m"
             - "--v=4"

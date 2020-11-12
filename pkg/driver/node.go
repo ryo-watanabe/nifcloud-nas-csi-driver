@@ -29,7 +29,7 @@ import (
 	"golang.org/x/net/context"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"k8s.io/kubernetes/pkg/util/mount"
+	"k8s.io/utils/mount"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -52,7 +52,8 @@ func registerNodePrivateIp(config *NifcloudNasDriverConfig) error {
 	glog.Infof("Node private IP : %s", privateIp)
 
 	// Annotate private ip in csinode resource
-	csiNode, err := config.KubeClient.StorageV1beta1().CSINodes().Get(config.NodeID, metav1.GetOptions{})
+	ctx := context.TODO()
+	csiNode, err := config.KubeClient.StorageV1().CSINodes().Get(ctx, config.NodeID, metav1.GetOptions{})
 	if err != nil {
 		return err
 	}
@@ -63,7 +64,7 @@ func registerNodePrivateIp(config *NifcloudNasDriverConfig) error {
 	}
 	annotations[config.Name + "/privateIp"] = strings.Split(string(privateIp), "/")[0]
 	csiNode.ObjectMeta.SetAnnotations(annotations)
-	csiNode, err = config.KubeClient.StorageV1beta1().CSINodes().Update(csiNode)
+	csiNode, err = config.KubeClient.StorageV1().CSINodes().Update(ctx, csiNode, metav1.UpdateOptions{})
 	if err != nil {
 		return err
 	}
@@ -198,6 +199,7 @@ func (s *nodeServer) NodeGetId(ctx context.Context, req *csi.NodeGetIdRequest) (
 func (s *nodeServer) NodeGetInfo(ctx context.Context, req *csi.NodeGetInfoRequest) (*csi.NodeGetInfoResponse, error) {
 	return &csi.NodeGetInfoResponse{
 		NodeId: s.driver.config.NodeID,
+		MaxVolumesPerNode: 128,
 	}, nil
 }
 

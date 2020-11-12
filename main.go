@@ -23,10 +23,10 @@ import (
 	"github.com/golang/glog"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
-	"k8s.io/kubernetes/pkg/util/mount"
+	"k8s.io/utils/mount"
 	"github.com/ryo-watanabe/nfcl-nas-csi-driver/pkg/cloud"
 	"github.com/ryo-watanabe/nfcl-nas-csi-driver/pkg/driver"
-	clientset "github.com/kubernetes-csi/external-snapshotter/v2/pkg/client/clientset/versioned"
+	clientset "github.com/kubernetes-csi/external-snapshotter/client/v3/clientset/versioned"
 )
 
 var (

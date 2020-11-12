@@ -11,6 +11,7 @@ import (
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/golang/glog"
 	"github.com/golang/protobuf/ptypes"
+	"golang.org/x/net/context"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -112,32 +113,32 @@ func retryNotifyRestic(err error, wait time.Duration) {
 }
 
 // execute restic Job with backing off
-func doResticJob(job *batchv1.Job, secret *corev1.Secret, kubeClient kubernetes.Interface, initInterval int) (string, error) {
+func doResticJob(ctx context.Context, job *batchv1.Job, secret *corev1.Secret, kubeClient kubernetes.Interface, initInterval int) (string, error) {
 
 	name := job.GetName()
 	namespace := job.GetNamespace()
 
 	// Create Secret
-	_, err := kubeClient.CoreV1().Secrets(namespace).Create(secret)
+	_, err := kubeClient.CoreV1().Secrets(namespace).Create(ctx, secret, metav1.CreateOptions{})
 	if err != nil && !errors.IsAlreadyExists(err) {
 		return "", fmt.Errorf("Creating restic secret error - %s", err.Error())
 	}
-	defer kubeClient.CoreV1().Secrets(namespace).Delete(secret.GetName(), &metav1.DeleteOptions{})
+	defer kubeClient.CoreV1().Secrets(namespace).Delete(ctx, secret.GetName(), metav1.DeleteOptions{})
 
 	// Create job
 	var dp metav1.DeletionPropagation = metav1.DeletePropagationForeground
-	_, err = kubeClient.BatchV1().Jobs(namespace).Create(job)
+	_, err = kubeClient.BatchV1().Jobs(namespace).Create(ctx, job, metav1.CreateOptions{})
 	if err != nil {
 		if !errors.IsAlreadyExists(err) {
 			return "", fmt.Errorf("Creating restic job error - %s", err.Error())
 		}
-		kubeClient.BatchV1().Jobs(namespace).Delete(name, &metav1.DeleteOptions{PropagationPolicy:&dp})
-		_, err = kubeClient.BatchV1().Jobs(namespace).Create(job)
+		kubeClient.BatchV1().Jobs(namespace).Delete(ctx, name, metav1.DeleteOptions{PropagationPolicy:&dp})
+		_, err = kubeClient.BatchV1().Jobs(namespace).Create(ctx, job, metav1.CreateOptions{})
 		if err != nil {
 			return "", fmt.Errorf("Re-creating restic job error - %s", err.Error())
 		}
 	}
-	defer kubeClient.BatchV1().Jobs(namespace).Delete(name, &metav1.DeleteOptions{PropagationPolicy:&dp})
+	defer kubeClient.BatchV1().Jobs(namespace).Delete(ctx, name, metav1.DeleteOptions{PropagationPolicy:&dp})
 
 	// wait for job completed with backoff retry
 	b := backoff.NewExponentialBackOff()
@@ -146,7 +147,7 @@ func doResticJob(job *batchv1.Job, secret *corev1.Secret, kubeClient kubernetes.
 	b.Multiplier = 2.0
 	b.InitialInterval = time.Duration(initInterval) * time.Second
 	chkJobCompleted := func() error {
-		chkJob, err := kubeClient.BatchV1().Jobs(namespace).Get(name, metav1.GetOptions{})
+		chkJob, err := kubeClient.BatchV1().Jobs(namespace).Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
 			return backoff.Permanent(err)
 		}
@@ -165,7 +166,7 @@ func doResticJob(job *batchv1.Job, secret *corev1.Secret, kubeClient kubernetes.
 	}
 
 	// Get logs
-	podList, err := kubeClient.CoreV1().Pods(namespace).List(metav1.ListOptions{})
+	podList, err := kubeClient.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return "", fmt.Errorf("Listing job pods error - %s", err.Error())
 	}
@@ -173,7 +174,7 @@ func doResticJob(job *batchv1.Job, secret *corev1.Secret, kubeClient kubernetes.
 		refs := pod.ObjectMeta.GetOwnerReferences()
 		if len(refs) > 0 && refs[0].Name == name {
 			req := kubeClient.CoreV1().Pods(namespace).GetLogs(pod.Name, &corev1.PodLogOptions{})
-			podLogs, err := req.Stream()
+			podLogs, err := req.Stream(ctx)
 			if err != nil {
 				return "", fmt.Errorf("Logs request error - %s", err.Error())
 			}

@@ -36,7 +36,7 @@ import (
 
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/tools/cache"
-	"k8s.io/kubernetes/pkg/util/mount"
+	"k8s.io/utils/mount"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 
 	"github.com/aokumasan/nifcloud-sdk-go-v2/service/nas"
@@ -129,13 +129,13 @@ func (c *controllerServer) pvDeleted(obj interface{}) {
 }
 
 // Get reserved CIDRIP from PVC's annotations
-func getIpv4CiderFromPVC(name string, driver *NifcloudNasDriver) (string, error) {
+func getIpv4CiderFromPVC(ctx context.Context, name string, driver *NifcloudNasDriver) (string, error) {
 	kubeClient := driver.config.KubeClient
 	pvcUIDs := strings.SplitN(name, "-", 2)
 	if len(pvcUIDs) < 2 {
 		return "", fmt.Errorf("Error getting IP from PVC : Cannot split UID")
 	}
-	pvcs, err := kubeClient.CoreV1().PersistentVolumeClaims("").List(metav1.ListOptions{})
+	pvcs, err := kubeClient.CoreV1().PersistentVolumeClaims("").List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return "", fmt.Errorf("Error getting PVC list : %s", err.Error())
 	}
@@ -226,7 +226,7 @@ func (s *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 		err = status.Error(codes.InvalidArgument, err.Error())
 		return
 	}
-	securityGroupName, err := getSecurityGroupName(s.config.driver)
+	securityGroupName, err := getSecurityGroupName(ctx, s.config.driver)
 	if err != nil {
 		err = status.Error(codes.InvalidArgument, err.Error())
 		return
@@ -263,7 +263,7 @@ func (s *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 	} else {
 		// If we are creating a new instance, we need pick an unused ip from reserved-ipv4-cidr
 		var reservedIPv4CIDR string
-		reservedIPv4CIDR, err = getIpv4CiderFromPVC(req.GetName(), s.config.driver)
+		reservedIPv4CIDR, err = getIpv4CiderFromPVC(ctx, req.GetName(), s.config.driver)
 		if err != nil {
 			err = status.Error(codes.InvalidArgument, "volume name invalid")
 			return
@@ -360,7 +360,7 @@ func (s *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 
 	// Restoring from snapshot
 	if snapshotId != "" {
-		err = s.restoreSnapshot(snapshotId, vol)
+		err = s.restoreSnapshot(ctx, snapshotId, vol)
 		if err != nil {
 			err = status.Error(codes.Internal, "error restoring volume contents from snapshot" + err.Error())
 			return
@@ -451,7 +451,7 @@ func (s *controllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVolu
 			return nil, status.Error(codes.Internal, "removing source path:" + err.Error())
 		}
 		// check any other PVs on shared NAS
-		mustDeleted, err := noOtherPvsInSharedNas(sourcePath, *nas.NASInstanceIdentifier, s.config.driver)
+		mustDeleted, err := noOtherPvsInSharedNas(ctx, sourcePath, *nas.NASInstanceIdentifier, s.config.driver)
 		if err != nil {
 			return nil, status.Error(codes.Internal, "checking other PVs on shared NAS:" + err.Error())
 		}
@@ -578,13 +578,13 @@ func (s *controllerServer) nasInstanceToCSIVolume(n *nas.NASInstance, req *csi.C
 }
 
 // Get PVC name / namespace from volumeID
-func getPVCFromVolumeId(volumeId string, driver *NifcloudNasDriver) (string, string, error) {
+func getPVCFromVolumeId(ctx context.Context, volumeId string, driver *NifcloudNasDriver) (string, string, error) {
 	kubeClient := driver.config.KubeClient
 	pvcUIDs := strings.SplitN(volumeId, "-", 2)
 	if len(pvcUIDs) < 2 {
 		return "", "", fmt.Errorf("Error splitting UID %s", volumeId)
 	}
-	pvcs, err := kubeClient.CoreV1().PersistentVolumeClaims("").List(metav1.ListOptions{})
+	pvcs, err := kubeClient.CoreV1().PersistentVolumeClaims("").List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return "", "", fmt.Errorf("Error getting PVC list : %s", err.Error())
 	}
@@ -610,7 +610,7 @@ func (s *controllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateSn
 		return nil, status.Error(codes.InvalidArgument, "CreateSnapshot sourceVolumeId must be provided")
 	}
 	_, pvId := filepath.Split(sourceVolumeId)
-	pvc, namespace, err := getPVCFromVolumeId(pvId, s.config.driver)
+	pvc, namespace, err := getPVCFromVolumeId(ctx, pvId, s.config.driver)
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, "Cannot find pvc bounded to " + name + " : " + err.Error())
 	}
@@ -621,13 +621,13 @@ func (s *controllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateSn
 		return nil, status.Error(codes.Internal, "Error configure restic job : " + err.Error())
 	}
 	// Get kube-system UID for cluster ID
-	clusterUID, err := getNamespaceUID("kube-system", s.config.driver)
+	clusterUID, err := getNamespaceUID(ctx, "kube-system", s.config.driver)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "Error getting namespace UID : " + err.Error())
 	}
 	clusterUID = "cluster-" + clusterUID
 	job, secret := r.resticJobBackup(pvId, pvc, namespace, clusterUID)
-	output, err := doResticJob(job, secret, s.config.driver.config.KubeClient, 30)
+	output, err := doResticJob(ctx, job, secret, s.config.driver.config.KubeClient, 30)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "Error running backup job : " + err.Error())
 	}
@@ -642,7 +642,7 @@ func (s *controllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateSn
 
 	// List job
 	job, secret = r.resticJobListSnapshots()
-	output, err = doResticJob(job, secret, s.config.driver.config.KubeClient, 5)
+	output, err = doResticJob(ctx, job, secret, s.config.driver.config.KubeClient, 5)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "Error running list snapshots job : " + err.Error())
 	}
@@ -687,7 +687,7 @@ func (s *controllerServer) DeleteSnapshot(ctx context.Context, req *csi.DeleteSn
 		return nil, status.Error(codes.Internal, "Error configure restic job : " + err.Error())
 	}
 	job, secret := r.resticJobDelete(snapshotId)
-	output, err := doResticJob(job, secret, s.config.driver.config.KubeClient, 10)
+	output, err := doResticJob(ctx, job, secret, s.config.driver.config.KubeClient, 10)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "Error running delete snapshot job : " + err.Error() + " : " + output)
 	}
@@ -707,7 +707,7 @@ func (s *controllerServer) ListSnapshots(ctx context.Context, req *csi.ListSnaps
 		return nil, status.Error(codes.Internal, "Error configure restic job : " + err.Error())
 	}
 	job, secret := r.resticJobListSnapshots()
-	output, err := doResticJob(job, secret, s.config.driver.config.KubeClient, 5)
+	output, err := doResticJob(ctx, job, secret, s.config.driver.config.KubeClient, 5)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "Error running list snapshots job : " + err.Error() + " : " + output)
 	}
@@ -755,13 +755,13 @@ func (s *controllerServer) ListSnapshots(ctx context.Context, req *csi.ListSnaps
 }
 
 // Get snapshotclass secrets from snapshotID
-func getSecretsFromSnapshotId(snapshotId string, driver *NifcloudNasDriver) (map[string]string, error) {
+func getSecretsFromSnapshotId(ctx context.Context, snapshotId string, driver *NifcloudNasDriver) (map[string]string, error) {
 
 	m := make(map[string]string)
 
 	snapClient := driver.config.SnapClient
 	kubeClient := driver.config.KubeClient
-	contents, err := snapClient.SnapshotV1beta1().VolumeSnapshotContents().List(metav1.ListOptions{})
+	contents, err := snapClient.SnapshotV1beta1().VolumeSnapshotContents().List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return m, fmt.Errorf("Error getting volumesnapshotcontents list : %s", err.Error())
 	}
@@ -775,7 +775,7 @@ func getSecretsFromSnapshotId(snapshotId string, driver *NifcloudNasDriver) (map
 	if className == "" {
 		return m, fmt.Errorf("Error snapshotId %d not found in volumesnapshotcontents : %s", snapshotId, err.Error())
 	}
-	class, err := snapClient.SnapshotV1beta1().VolumeSnapshotClasses().Get(className, metav1.GetOptions{})
+	class, err := snapClient.SnapshotV1beta1().VolumeSnapshotClasses().Get(ctx, className, metav1.GetOptions{})
 	if err != nil {
 		return m, fmt.Errorf("Error getting volumesnapshotclass %s : %s", className, err.Error())
 	}
@@ -788,6 +788,7 @@ func getSecretsFromSnapshotId(snapshotId string, driver *NifcloudNasDriver) (map
 	secret, err := kubeClient.CoreV1().Secrets(
 		class.Parameters["csi.storage.k8s.io/snapshotter-secret-namespace"],
 		).Get(
+			ctx,
 			class.Parameters["csi.storage.k8s.io/snapshotter-secret-name"],
 			metav1.GetOptions{},
 		)
@@ -800,10 +801,10 @@ func getSecretsFromSnapshotId(snapshotId string, driver *NifcloudNasDriver) (map
 	return m, nil
 }
 
-func (s *controllerServer) restoreSnapshot(snapshotId string, vol *csi.Volume) error {
+func (s *controllerServer) restoreSnapshot(ctx context.Context, snapshotId string, vol *csi.Volume) error {
 
 	// Get secrets
-	secrets, err := getSecretsFromSnapshotId(snapshotId, s.config.driver)
+	secrets, err := getSecretsFromSnapshotId(ctx, snapshotId, s.config.driver)
 	if err != nil {
 		return fmt.Errorf("Error getting secrets for %s : %s", snapshotId, err.Error())
 	}
@@ -814,7 +815,7 @@ func (s *controllerServer) restoreSnapshot(snapshotId string, vol *csi.Volume) e
 	}
 	// List job
 	job, secret := r.resticJobListSnapshots()
-	output, err := doResticJob(job, secret, s.config.driver.config.KubeClient, 5)
+	output, err := doResticJob(ctx, job, secret, s.config.driver.config.KubeClient, 5)
 	if err != nil {
 		return fmt.Errorf("Error running list snapshots job : %s", err.Error())
 	}
@@ -860,7 +861,7 @@ func (s *controllerServer) restoreSnapshot(snapshotId string, vol *csi.Volume) e
 
 	// Restore job
 	job, secret = r.resticJobRestore(snapshotId, "/tmp/", s.config.driver.config.NodeID)
-	output, err = doResticJob(job, secret, s.config.driver.config.KubeClient, 30)
+	output, err = doResticJob(ctx, job, secret, s.config.driver.config.KubeClient, 30)
 	if err != nil {
 		return fmt.Errorf("Error running restore snapshot job : %s : %s", err.Error(), output)
 	}
@@ -892,4 +893,8 @@ func (s *controllerServer) GetCapacity(ctx context.Context, req *csi.GetCapacity
 
 func (s *controllerServer) ControllerExpandVolume(ctx context.Context, req *csi.ControllerExpandVolumeRequest) (*csi.ControllerExpandVolumeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "ControllerExpandVolume unsupported")
+}
+
+func (s *controllerServer) ControllerGetVolume(ctx context.Context, req *csi.ControllerGetVolumeRequest) (*csi.ControllerGetVolumeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "ControllerGetVolume unsupported")
 }

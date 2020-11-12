@@ -24,11 +24,11 @@ import (
 	"github.com/golang/glog"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"k8s.io/kubernetes/pkg/util/mount"
+	"k8s.io/utils/mount"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"github.com/cenkalti/backoff"
-	clientset "github.com/kubernetes-csi/external-snapshotter/v2/pkg/client/clientset/versioned"
+	clientset "github.com/kubernetes-csi/external-snapshotter/client/v3/clientset/versioned"
 
 	"github.com/ryo-watanabe/nfcl-nas-csi-driver/pkg/cloud"
 )
