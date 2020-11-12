@@ -15,6 +15,33 @@ metadata:
   name: nifcloud-nas-csi-controller-sa
   namespace: nifcloud-nas-csi-driver
 ---
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: nifcloud-nas-csi-controller
+rules:
+- apiGroups: [""]
+  resources: ["namespaces"]
+  verbs: ["get", "list"]
+- apiGroups: [""]
+  resources: ["persistentvolumes"]
+  verbs: ["get", "list", "watch", "create", "delete"]
+- apiGroups: [""]
+  resources: ["persistentvolumeclaims"]
+  verbs: ["get", "list", "watch", "update"]
+- apiGroups: ["storage.k8s.io"]
+  resources: ["storageclasses"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["storage.k8s.io"]
+  resources: ["csinodes"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["list", "watch", "create", "update", "patch"]
+---
 kind: ClusterRoleBinding
 apiVersion: rbac.authorization.k8s.io/v1
 metadata:
@@ -25,34 +52,32 @@ subjects:
     namespace: nifcloud-nas-csi-driver
 roleRef:
   kind: ClusterRole
-  name: system:csi-external-provisioner
+  name: nifcloud-nas-csi-controller
   apiGroup: rbac.authorization.k8s.io
 ---
-kind: ClusterRoleBinding
 apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
 metadata:
-  name: nifcloud-nas-csi-controller-attacher-binding
-subjects:
-  - kind: ServiceAccount
-    name: nifcloud-nas-csi-controller-sa
-    namespace: nifcloud-nas-csi-driver
-roleRef:
-  kind: ClusterRole
-  name: system:csi-external-attacher
-  apiGroup: rbac.authorization.k8s.io
----
-kind: ClusterRoleBinding
-apiVersion: rbac.authorization.k8s.io/v1
-metadata:
-  name: nifcloud-nas-csi-controller-view-binding
-subjects:
-  - kind: ServiceAccount
-    name: nifcloud-nas-csi-controller-sa
-    namespace: nifcloud-nas-csi-driver
-roleRef:
-  kind: ClusterRole
-  name: system:aggregate-to-view
-  apiGroup: rbac.authorization.k8s.io
+  name: nifcloud-nas-csi-node
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "list"]
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["delete"]
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["get", "list", "update"]
+- apiGroups: [""]
+  resources: ["namespaces"]
+  verbs: ["get", "list"]
+- apiGroups: [""]
+  resources: ["persistentvolumes"]
+  verbs: ["get", "list", "watch", "update"]
+- apiGroups: ["storage.k8s.io"]
+  resources: ["csinodes"]
+  verbs: ["get", "list", "watch", "update"]
 ---
 kind: ClusterRoleBinding
 apiVersion: rbac.authorization.k8s.io/v1
@@ -64,5 +89,5 @@ subjects:
     namespace: nifcloud-nas-csi-driver
 roleRef:
   kind: ClusterRole
-  name: system:node
+  name: nifcloud-nas-csi-node
   apiGroup: rbac.authorization.k8s.io

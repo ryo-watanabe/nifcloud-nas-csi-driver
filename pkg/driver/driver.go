@@ -24,10 +24,11 @@ import (
 	"github.com/golang/glog"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"k8s.io/kubernetes/pkg/util/mount"
+	"k8s.io/utils/mount"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"github.com/cenkalti/backoff"
+	clientset "github.com/kubernetes-csi/external-snapshotter/client/v3/clientset/versioned"
 
 	"github.com/ryo-watanabe/nfcl-nas-csi-driver/pkg/cloud"
 )
@@ -41,6 +42,7 @@ type NifcloudNasDriverConfig struct {
 	Mounter       mount.Interface // Mount library
 	Cloud         *cloud.Cloud    // Cloud provider
 	KubeClient    kubernetes.Interface  // k8s client
+	SnapClient    clientset.Interface  // snapshot client
 }
 
 type NifcloudNasDriver struct {
@@ -97,6 +99,8 @@ func NewNifcloudNasDriver(config *NifcloudNasDriverConfig) (*NifcloudNasDriver, 
 	if config.RunController {
 		csc := []csi.ControllerServiceCapability_RPC_Type{
 			csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME,
+			csi.ControllerServiceCapability_RPC_CREATE_DELETE_SNAPSHOT,
+			csi.ControllerServiceCapability_RPC_LIST_SNAPSHOTS,
 		}
 		driver.addControllerServiceCapabilities(csc)
 

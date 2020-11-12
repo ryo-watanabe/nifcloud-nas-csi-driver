@@ -1,0 +1,9 @@
+apiVersion: snapshot.storage.k8s.io/v1beta1
+kind: VolumeSnapshotClass
+metadata:
+  name: csi-nifcloud-rstc
+driver: nas.csi.storage.nifcloud.com
+deletionPolicy: Delete
+parameters:
+  csi.storage.k8s.io/snapshotter-secret-name: restic-creds
+  csi.storage.k8s.io/snapshotter-secret-namespace: nifcloud-nas-csi-driver

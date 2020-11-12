@@ -28,7 +28,7 @@ import (
 	"github.com/golang/glog"
 	"golang.org/x/net/context"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/kubernetes/pkg/util/mount"
+	"k8s.io/utils/mount"
 	"k8s.io/apimachinery/pkg/util/rand"
 
 	"github.com/ryo-watanabe/nfcl-nas-csi-driver/pkg/util"
@@ -65,7 +65,7 @@ func (s *controllerServer) convertSharedRequest(
 	}
 
 	// Get kube-system UID for cluster ID
-	clusterUID, err := getNamespaceUID("kube-system", s.config.driver)
+	clusterUID, err := getNamespaceUID(ctx, "kube-system", s.config.driver)
 	if err != nil {
 		return "", 0, fmt.Errorf("Error getting namespace UID: %S", err.Error())
 	}
@@ -76,7 +76,7 @@ func (s *controllerServer) convertSharedRequest(
 	for i := 1; i <= 10; i++ {
 		// Generate NAS Instance name
 		sharedName = sharedNamePrefix + fmt.Sprintf("%03d", i)
-		reservedBytes, err := getNasInstanceReservedCap(sharedName, s.config.driver)
+		reservedBytes, err := getNasInstanceReservedCap(ctx, sharedName, s.config.driver)
 		if err != nil {
 			return "", 0, fmt.Errorf("Error getting reserved cap of shared nas: %S", err.Error())
 		}
@@ -95,7 +95,7 @@ func (s *controllerServer) convertSharedRequest(
 			glog.V(4).Infof("New shared NAS instance %s for %s", sharedName, name)
 			break
 		}
-		sharedName, err = getSharedNameFromExistingPv(sharedName, s.config.driver)
+		sharedName, err = getSharedNameFromExistingPv(ctx, sharedName, s.config.driver)
 		if err != nil {
 			return "", 0, fmt.Errorf("Error getting shared nas name: %S", err.Error())
 		}
@@ -121,11 +121,11 @@ func (s *controllerServer) convertSharedRequest(
 
 // Check available space in shared nas
 // Both nas names with or without random string are OK for input nasName
-func getNasInstanceReservedCap(nasName string, driver *NifcloudNasDriver) (int64, error) {
+func getNasInstanceReservedCap(ctx context.Context, nasName string, driver *NifcloudNasDriver) (int64, error) {
 	kubeClient := driver.config.KubeClient
 
 	// Get PV list
-	pvs, err := kubeClient.CoreV1().PersistentVolumes().List(metav1.ListOptions{})
+	pvs, err := kubeClient.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return 0, fmt.Errorf("Error getting PV list : %s", err.Error())
 	}
@@ -151,11 +151,11 @@ func getNasInstanceReservedCap(nasName string, driver *NifcloudNasDriver) (int64
 }
 
 // Check any other PVs on shared NAS
-func noOtherPvsInSharedNas(name, nasName string, driver *NifcloudNasDriver) (bool, error) {
+func noOtherPvsInSharedNas(ctx context.Context, name, nasName string, driver *NifcloudNasDriver) (bool, error) {
 	kubeClient := driver.config.KubeClient
 
 	// Get PV list
-	pvs, err := kubeClient.CoreV1().PersistentVolumes().List(metav1.ListOptions{})
+	pvs, err := kubeClient.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return false, fmt.Errorf("Error getting PV list : %s", err.Error())
 	}
@@ -182,11 +182,11 @@ func noOtherPvsInSharedNas(name, nasName string, driver *NifcloudNasDriver) (boo
 }
 
 // Get the nas name with rondom string from prefixed part of the name
-func getSharedNameFromExistingPv(nasName string, driver *NifcloudNasDriver) (string, error) {
+func getSharedNameFromExistingPv(ctx context.Context, nasName string, driver *NifcloudNasDriver) (string, error) {
 	kubeClient := driver.config.KubeClient
 
 	// Get PV list
-	pvs, err := kubeClient.CoreV1().PersistentVolumes().List(metav1.ListOptions{})
+	pvs, err := kubeClient.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return "", fmt.Errorf("Error getting PV list : %s", err.Error())
 	}
@@ -223,9 +223,9 @@ func getSharedNameFromExistingNas(ctx context.Context, nasName string, driver *N
 }
 
 // Get namespace UID
-func getNamespaceUID(name string, driver *NifcloudNasDriver) (string, error) {
+func getNamespaceUID(ctx context.Context, name string, driver *NifcloudNasDriver) (string, error) {
 	kubeClient := driver.config.KubeClient
-	ns, err := kubeClient.CoreV1().Namespaces().Get(name, metav1.GetOptions{})
+	ns, err := kubeClient.CoreV1().Namespaces().Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		return "", fmt.Errorf("Error getting namespace : %s", err.Error())
 	}

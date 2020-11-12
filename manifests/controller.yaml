@@ -19,22 +19,23 @@ spec:
       serviceAccount: nifcloud-nas-csi-controller-sa
       hostNetwork: true
       containers:
-        - name: csi-external-attacher
+        - name: csi-external-provisioner
           imagePullPolicy: Always
-          image: quay.io/k8scsi/csi-attacher:v2.0.0
+          image: k8s.gcr.io/sig-storage/csi-provisioner:v2.0.2
           args:
+            - "--timeout=30m"
             - "--v=4"
             - "--csi-address=/csi/csi.sock"
           volumeMounts:
             - name: socket-dir
               mountPath: /csi
-        - name: csi-external-provisioner
-          imagePullPolicy: Always
-          image: quay.io/k8scsi/csi-provisioner:v1.4.0
+        - name: csi-snapshotter
+          image: k8s.gcr.io/sig-storage/csi-snapshotter:v3.0.0
           args:
             - "--timeout=30m"
             - "--v=4"
             - "--csi-address=/csi/csi.sock"
+            #- --leader-election=true
           volumeMounts:
             - name: socket-dir
               mountPath: /csi
@@ -48,7 +49,6 @@ spec:
             - "--endpoint=unix:/csi/csi.sock"
             - "--nodeid=$(KUBE_NODE_NAME)"
             - "--controller=true"
-            - "--naaphost=naap.hatoba.nifcloud.com"
           env:
             - name: KUBE_NODE_NAME
               valueFrom:
@@ -64,14 +64,16 @@ spec:
                 secretKeyRef:
                   name: cloud-credential
                   key: secretkey
-            - name: NAAP_USER
-              valueFrom:
-                secretKeyRef:
-                  name: cloud-credential
-                  key: naapuser
           volumeMounts:
             - name: socket-dir
               mountPath: /csi
+            - name: host-tmp
+              mountPath: /tmp
+              mountPropagation: "Bidirectional"
       volumes:
+        - name: host-tmp
+          hostPath:
+            path: /tmp
+            type: Directory
         - name: socket-dir
           emptyDir: {}

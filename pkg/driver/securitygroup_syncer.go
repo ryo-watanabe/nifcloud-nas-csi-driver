@@ -60,9 +60,9 @@ func (s *NSGSyncer) runNSGSyncer() {
 	}
 }
 
-func getSecurityGroupName(driver *NifcloudNasDriver) (string, error) {
+func getSecurityGroupName(ctx context.Context, driver *NifcloudNasDriver) (string, error) {
 	// Get kube-system UID for NAS Security Group Name
-	clusterUID, err := getNamespaceUID("kube-system", driver)
+	clusterUID, err := getNamespaceUID(ctx, "kube-system", driver)
 	if err != nil {
 		return "", fmt.Errorf("Error getting namespace UUID: %S", err.Error())
 	}
@@ -89,7 +89,7 @@ func (s *NSGSyncer) SyncNasSecurityGroups() error {
 	ctx := context.TODO()
 
 	// Nodes' private IPs
-	csinodes, err := kubeClient.StorageV1beta1().CSINodes().List(metav1.ListOptions{})
+	csinodes, err := kubeClient.StorageV1().CSINodes().List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return fmt.Errorf("Error getting node private IPs: %s", err.Error())
 	}
@@ -107,11 +107,11 @@ func (s *NSGSyncer) SyncNasSecurityGroups() error {
 
 
 	// NAS Security Groups
-	securityGroupName, err := getSecurityGroupName(s.driver)
+	securityGroupName, err := getSecurityGroupName(ctx, s.driver)
 	if err != nil {
 		return fmt.Errorf("Error getting security group name: %s", err.Error())
 	}
-	classes, err := kubeClient.StorageV1().StorageClasses().List(metav1.ListOptions{})
+	classes, err := kubeClient.StorageV1().StorageClasses().List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return fmt.Errorf("Error getting storage class: %s", err.Error())
 	}
