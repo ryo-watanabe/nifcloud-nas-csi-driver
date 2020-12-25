@@ -45,7 +45,7 @@ var (
 
 func registerNodePrivateIp(config *NifcloudNasDriverConfig) error {
 	// Get private IP (if:ens192)
-	privateIp, err := exec.Command("sh", "-c", "ip -4 a show ens192 | grep inet | tr -s ' ' | cut -d' ' -f3").Output()
+	privateIp, err := exec.Command("sh", "-c", "ip -4 a show " + config.PrivateIfName + " | grep inet | tr -s ' ' | cut -d' ' -f3").Output()
 	if err != nil {
 		return err
 	}

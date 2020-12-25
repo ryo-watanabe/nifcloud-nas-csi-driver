@@ -37,6 +37,7 @@ type NifcloudNasDriverConfig struct {
 	Name          string          // Driver name
 	Version       string          // Driver version
 	NodeID        string          // Node name
+	PrivateIfName string          // Private network interface name
 	RunController bool            // Run CSI controller service
 	RunNode       bool            // Run CSI node service
 	Mounter       mount.Interface // Mount library

@@ -32,6 +32,7 @@ import (
 var (
 	endpoint      = flag.String("endpoint", "unix:/tmp/csi.sock", "CSI endpoint")
 	nodeID        = flag.String("nodeid", "", "node id")
+	privateIfName = flag.String("privateifname", "ens192", "private network interface name")
 	region        = flag.String("region", "jp-east-1", "nifcloud region")
 	runController = flag.Bool("controller", false, "run controller service")
 	runNode       = flag.Bool("node", false, "run node service")
@@ -73,6 +74,7 @@ func main() {
 		Name:          driverName,
 		Version:       version,
 		NodeID:        *nodeID,
+		PrivateIfName: *privateIfName,
 		RunController: *runController,
 		RunNode:       *runNode,
 		Mounter:       mounter,
