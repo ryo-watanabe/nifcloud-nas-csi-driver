@@ -107,16 +107,19 @@ func (s *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublish
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
-	// Check if mount already exists
+	// Check if mount/targetPath already exists
 	mounted, err := s.isDirMounted(targetPath)
 	if err != nil {
-		// On Windows the mount target must not exist
-		if goOs == "windows" {
-			if !os.IsNotExist(err) {
-				return nil, err
-			}
-		} else {
+		if !os.IsNotExist(err) {
 			return nil, err
+		}
+		// On Windows the mount target must not exist
+		if goOs != "windows" {
+			// Make target path
+			err = os.MkdirAll(targetPath, 0755)
+			if err != nil {
+				return nil, fmt.Errorf("Error making target path %s: %s", targetPath, err.Error())
+			}
 		}
 	}
 
