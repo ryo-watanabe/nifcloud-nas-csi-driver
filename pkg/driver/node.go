@@ -17,6 +17,7 @@ limitations under the License.
 package driver
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -27,10 +28,11 @@ import (
 	csi "github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/golang/glog"
 	"golang.org/x/net/context"
+	"golang.org/x/sys/unix"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"k8s.io/utils/mount"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/mount"
 )
 
 const (
@@ -45,7 +47,7 @@ var (
 
 func registerNodePrivateIp(config *NifcloudNasDriverConfig) error {
 	// Get private IP (if:ens192)
-	privateIp, err := exec.Command("sh", "-c", "ip -4 a show " + config.PrivateIfName + " | grep inet | tr -s ' ' | cut -d' ' -f3").Output()
+	privateIp, err := exec.Command("sh", "-c", "ip -4 a show "+config.PrivateIfName+" | grep inet | tr -s ' ' | cut -d' ' -f3").Output()
 	if err != nil {
 		return err
 	}
@@ -62,7 +64,7 @@ func registerNodePrivateIp(config *NifcloudNasDriverConfig) error {
 	if annotations == nil {
 		annotations = make(map[string]string, 0)
 	}
-	annotations[config.Name + "/privateIp"] = strings.Split(string(privateIp), "/")[0]
+	annotations[config.Name+"/privateIp"] = strings.Split(string(privateIp), "/")[0]
 	csiNode.ObjectMeta.SetAnnotations(annotations)
 	csiNode, err = config.KubeClient.StorageV1().CSINodes().Update(ctx, csiNode, metav1.UpdateOptions{})
 	if err != nil {
@@ -201,7 +203,7 @@ func (s *nodeServer) NodeGetId(ctx context.Context, req *csi.NodeGetIdRequest) (
 
 func (s *nodeServer) NodeGetInfo(ctx context.Context, req *csi.NodeGetInfoRequest) (*csi.NodeGetInfoResponse, error) {
 	return &csi.NodeGetInfoResponse{
-		NodeId: s.driver.config.NodeID,
+		NodeId:            s.driver.config.NodeID,
 		MaxVolumesPerNode: 128,
 	}, nil
 }
@@ -273,6 +275,69 @@ func (s *nodeServer) unmountPath(targetPath string) error {
 	return nil
 }
 
+type volumeStats struct {
+	availBytes int64
+	totalBytes int64
+	usedBytes  int64
+
+	availInodes int64
+	totalInodes int64
+	usedInodes  int64
+}
+
+func getVolumeStats(volumePath string) (*volumeStats, error) {
+	var statfs unix.Statfs_t
+	err := unix.Statfs(volumePath, &statfs)
+	if err != nil {
+		return nil, err
+	}
+
+	volStats := &volumeStats{
+		availBytes: int64(statfs.Bavail) * int64(statfs.Bsize),
+		totalBytes: int64(statfs.Blocks) * int64(statfs.Bsize),
+		usedBytes:  (int64(statfs.Blocks) - int64(statfs.Bfree)) * int64(statfs.Bsize),
+
+		availInodes: int64(statfs.Ffree),
+		totalInodes: int64(statfs.Files),
+		usedInodes:  int64(statfs.Files) - int64(statfs.Ffree),
+	}
+
+	return volStats, nil
+}
+
+func (s *nodeServer) NodeGetVolumeStats(ctx context.Context, req *csi.NodeGetVolumeStatsRequest) (*csi.NodeGetVolumeStatsResponse, error) {
+
+	volumePath := req.GetVolumePath()
+	if volumePath == "" {
+		return nil, status.Error(codes.InvalidArgument, "Error getting volume path")
+	}
+
+	stats, err := getVolumeStats(volumePath)
+	if err != nil {
+		if errors.Is(err, unix.ENOENT) {
+			return nil, status.Errorf(codes.NotFound, "volume path %v is not mounted", volumePath)
+		}
+		return nil, status.Errorf(codes.Internal, "failed to retrieve statistics for volume path %v: %v", volumePath, err)
+	}
+
+	return &csi.NodeGetVolumeStatsResponse{
+		Usage: []*csi.VolumeUsage{
+			&csi.VolumeUsage{
+				Available: stats.availBytes,
+				Total:     stats.totalBytes,
+				Used:      stats.usedBytes,
+				Unit:      csi.VolumeUsage_BYTES,
+			},
+			&csi.VolumeUsage{
+				Available: stats.availInodes,
+				Total:     stats.totalInodes,
+				Used:      stats.usedInodes,
+				Unit:      csi.VolumeUsage_INODES,
+			},
+		},
+	}, nil
+}
+
 //// Unimplemented funcs
 
 func (s *nodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
@@ -285,8 +350,4 @@ func (s *nodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstage
 
 func (s *nodeServer) NodeExpandVolume(ctx context.Context, req *csi.NodeExpandVolumeRequest) (*csi.NodeExpandVolumeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "NodeExpandVolume unsupported")
-}
-
-func (s *nodeServer) NodeGetVolumeStats(ctx context.Context, req *csi.NodeGetVolumeStatsRequest) (*csi.NodeGetVolumeStatsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "NodeGetVolumeStats unsupported")
 }
