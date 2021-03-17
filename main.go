@@ -34,6 +34,7 @@ var (
 	nodeID        = flag.String("nodeid", "", "node id")
 	privateIfName = flag.String("privateifname", "ens192", "private network interface name")
 	region        = flag.String("region", "jp-east-1", "nifcloud region")
+	kubeconfig    = flag.String("kubeconfig", "", "kubeconfig file path")
 	runController = flag.Bool("controller", false, "run controller service")
 	runNode       = flag.Bool("node", false, "run node service")
 
@@ -49,7 +50,7 @@ func main() {
 
 	glog.Infof("Nifcloud Nas CSI driver version %v %v", version, revision)
 
-	cfg, err := clientcmd.BuildConfigFromFlags("", "")
+	cfg, err := clientcmd.BuildConfigFromFlags("", *kubeconfig)
 	if err != nil {
 		glog.Fatalf("Error building kubeconfig: %s", err.Error())
 	}
