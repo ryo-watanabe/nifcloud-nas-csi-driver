@@ -19,17 +19,22 @@ package driver
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"bufio"
+	"time"
 
+	"github.com/cenkalti/backoff"
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/golang/glog"
 	"golang.org/x/net/context"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/utils/mount"
 	"k8s.io/apimachinery/pkg/util/rand"
+	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/apimachinery/pkg/api/errors"
 
 	"github.com/ryo-watanabe/nfcl-nas-csi-driver/pkg/util"
 )
@@ -232,60 +237,142 @@ func getNamespaceUID(ctx context.Context, name string, driver *NifcloudNasDriver
 	return string(ns.ObjectMeta.GetUID()), nil
 }
 
-// Mount and mkdir/rmdir for shared volumes. Container must be privileged
-func opSourcePath(ip, nasName, sourcePath string, remove bool) error {
+func makeSourcePath(ctx context.Context, ip, nasName, sourcePath string, driver *NifcloudNasDriver) error {
+	glog.V(5).Infof("Making source path: %s %s %s", ip, nasName, sourcePath)
+	job := nfsJob(ip, "/", nasName, "default")
+	job.Spec.Template.Spec.Containers[0].Args = append(
+		job.Spec.Template.Spec.Containers[0].Args,
+		[]string{"mkdir", filepath.Join("/mnt", sourcePath)}...,
+	)
+	return doNfsJob(ctx, job, driver.config.KubeClient, 5)
+}
 
-	// Mount point
-	mountPoint := filepath.Join("tmp", sourcePath, "mnt")
-	err := os.MkdirAll(mountPoint, 0755)
-	if err != nil {
-		return fmt.Errorf("Error making mount point %s: %s", mountPoint, err.Error())
+func removeSourcePath(ctx context.Context, ip, nasName, sourcePath string, driver *NifcloudNasDriver) error {
+	glog.V(5).Infof("Removing source path: %s %s %s", ip, nasName, sourcePath)
+	job := nfsJob(ip, "/", nasName, "default")
+	job.Spec.Template.Spec.Containers[0].Args = append(
+		job.Spec.Template.Spec.Containers[0].Args,
+		[]string{"rm", "-rf", filepath.Join("/mnt", sourcePath)}...,
+	)
+	return doNfsJob(ctx, job, driver.config.KubeClient, 5)
+}
+
+// nfs job pod
+func nfsJob(ip, path, name, namespace string) *batchv1.Job {
+
+	backoffLimit := int32(2)
+	return &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+		Spec: batchv1.JobSpec{
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name:  name,
+							Image: "alpine",
+							VolumeMounts: []corev1.VolumeMount{
+								corev1.VolumeMount{
+									Name: "nfs",
+									MountPath: "/mnt",
+								},
+							},
+						},
+					},
+					Volumes: []corev1.Volume{
+						corev1.Volume{
+							Name: "nfs",
+							VolumeSource: corev1.VolumeSource{
+								NFS: &corev1.NFSVolumeSource{
+									Server: ip,
+									Path: path,
+								},
+							},
+						},
+					},
+					RestartPolicy: "Never",
+				},
+			},
+			BackoffLimit: &backoffLimit,
+		},
 	}
-	// Mount
-	mounter := mount.New("")
-	source := fmt.Sprintf("%s:/", ip)
-	fstype := "nfs"
-	options := []string{}
-	err = mounter.Mount(source, mountPoint, fstype, options)
+}
+
+// execute nfs Job with backing off
+func doNfsJob(ctx context.Context, job *batchv1.Job, kubeClient kubernetes.Interface, initInterval int) error {
+
+	name := job.GetName()
+	namespace := job.GetNamespace()
+
+	// Create job
+	var dp metav1.DeletionPropagation = metav1.DeletePropagationForeground
+	_, err := kubeClient.BatchV1().Jobs(namespace).Create(ctx, job, metav1.CreateOptions{})
 	if err != nil {
-		return fmt.Errorf("Mount error:", err.Error())
-	}
-	// Operation
-	tmppath := filepath.Join(mountPoint, sourcePath)
-	if remove {
-		// Remove source path
-		err = os.RemoveAll(tmppath)
-		if err != nil {
-			return fmt.Errorf("Error removing source path %s: %s", tmppath, err.Error())
+		if !errors.IsAlreadyExists(err) {
+			return fmt.Errorf("Creating nfs job error - %s", err.Error())
 		}
-	} else {
-		// Make source path
-		err = os.MkdirAll(tmppath, 0755)
+		kubeClient.BatchV1().Jobs(namespace).Delete(ctx, name, metav1.DeleteOptions{PropagationPolicy:&dp})
+		_, err = kubeClient.BatchV1().Jobs(namespace).Create(ctx, job, metav1.CreateOptions{})
 		if err != nil {
-			return fmt.Errorf("Error making source path %s: %s", tmppath, err.Error())
+			return fmt.Errorf("Re-creating nfs job error - %s", err.Error())
 		}
 	}
-	// Umount
-	err = mounter.Unmount(mountPoint)
-	if err != nil {
-		return fmt.Errorf("Umount error:", err.Error())
+	defer kubeClient.BatchV1().Jobs(namespace).Delete(ctx, name, metav1.DeleteOptions{PropagationPolicy:&dp})
+
+	// wait for job completed with backoff retry
+	b := backoff.NewExponentialBackOff()
+	b.MaxElapsedTime = time.Duration(30) * time.Minute
+	b.RandomizationFactor = 0.2
+	b.Multiplier = 2.0
+	b.InitialInterval = time.Duration(initInterval) * time.Second
+	chkJobCompleted := func() error {
+		chkJob, err := kubeClient.BatchV1().Jobs(namespace).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return backoff.Permanent(err)
+		}
+		if len(chkJob.Status.Conditions) > 0 {
+			if chkJob.Status.Conditions[0].Type == "Failed" {
+				return backoff.Permanent(fmt.Errorf("Job %s failed", name))
+			} else {
+				return nil
+			}
+		}
+		return fmt.Errorf("Job %s is running", name)
 	}
-	// Remove mount point
-	mountPointParent := filepath.Join("tmp", sourcePath)
-	err = os.RemoveAll(mountPointParent)
+	err = backoff.RetryNotify(chkJobCompleted, b, retryNotifyRestic)
 	if err != nil {
-		return fmt.Errorf("Error removing mount point %s: %s", mountPointParent, err.Error())
+		// Get logs
+		podList, err := kubeClient.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return fmt.Errorf("Listing job pods error - %s", err.Error())
+		}
+		for _, pod := range(podList.Items) {
+			refs := pod.ObjectMeta.GetOwnerReferences()
+			if len(refs) > 0 && refs[0].Name == name {
+				req := kubeClient.CoreV1().Pods(namespace).GetLogs(pod.Name, &corev1.PodLogOptions{})
+				podLogs, err := req.Stream(ctx)
+				if err != nil {
+					return fmt.Errorf("Logs request error - %s", err.Error())
+				}
+				reader := bufio.NewReader(podLogs)
+				defer podLogs.Close()
+				out := ""
+				for {
+					line, err := reader.ReadString('\n')
+					if line != "" {
+						out += line
+					}
+					if err != nil {
+						break
+					}
+				}
+				return fmt.Errorf("%s", out)
+			}
+		}
+		return fmt.Errorf("Cannot find pod for job %s", name)
 	}
 
 	return nil
-}
-
-func makeSourcePath(ip, nasName, sourcePath string) error {
-	glog.V(5).Infof("Making source path: %s %s %s", ip, nasName, sourcePath)
-	return opSourcePath(ip, nasName, sourcePath, false)
-}
-
-func removeSourcePath(ip, nasName, sourcePath string) error {
-	glog.V(5).Infof("Removing source path: %s %s %s", ip, nasName, sourcePath)
-	return opSourcePath(ip, nasName, sourcePath, true)
 }

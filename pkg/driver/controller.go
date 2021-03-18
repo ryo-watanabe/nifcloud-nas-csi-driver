@@ -21,7 +21,6 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"fmt"
-	"os"
 	"time"
 	"strconv"
 	"strings"
@@ -36,7 +35,6 @@ import (
 
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/tools/cache"
-	"k8s.io/utils/mount"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 
 	"github.com/aokumasan/nifcloud-sdk-go-v2/service/nas"
@@ -348,7 +346,7 @@ func (s *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 
 	// Make source path for shared NAS instance
 	if req.GetParameters()["shared"] == "true" {
-		err = makeSourcePath(getNasInstancePrivateIP(n), *n.NASInstanceIdentifier, req.GetName())
+		err = makeSourcePath(ctx, getNasInstancePrivateIP(n), *n.NASInstanceIdentifier, req.GetName(), s.config.driver)
 		if err != nil {
 			err = status.Error(codes.Internal, "error making source path for shared NASInstance:" + err.Error())
 			return
@@ -446,7 +444,7 @@ func (s *controllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVolu
 		}
 		s.config.deletingPvsQueue.Show()
 		// Remove source path on shared nas
-		err := removeSourcePath(getNasInstancePrivateIP(nas), *nas.NASInstanceIdentifier, sourcePath)
+		err := removeSourcePath(ctx, getNasInstancePrivateIP(nas), *nas.NASInstanceIdentifier, sourcePath, s.config.driver)
 		if err != nil {
 			return nil, status.Error(codes.Internal, "removing source path:" + err.Error())
 		}
@@ -838,29 +836,13 @@ func (s *controllerServer) restoreSnapshot(ctx context.Context, snapshotId strin
 		return fmt.Errorf("Snapshot not found in list")
 	}
 
-	snapPath := snap.GetSourceVolumeId()
-
-	// Mount point
-	mountPoint := filepath.Join("tmp", snapPath)
-	err = os.MkdirAll(mountPoint, 0755)
-	if err != nil {
-		return fmt.Errorf("Error making mount point ", mountPoint)
-	}
-	defer os.RemoveAll(mountPoint)
-
-	// Mount
-	mounter := mount.New("")
-	source := fmt.Sprintf("%s:/%s", vol.VolumeContext[attrIp], vol.VolumeContext[attrSourcePath])
-	fstype := "nfs"
-	options := []string{}
-	err = mounter.Mount(source, mountPoint, fstype, options)
-	if err != nil {
-		return fmt.Errorf("Mount error : %s", err.Error())
-	}
-	defer mounter.Unmount(mountPoint)
-
 	// Restore job
-	job, secret = r.resticJobRestore(snapshotId, "/tmp/", s.config.driver.config.NodeID)
+	job, secret = r.resticJobRestore(
+		snapshotId,
+		vol.VolumeContext[attrIp],
+		filepath.Join("/", vol.VolumeContext[attrSourcePath]),
+		snap.GetSourceVolumeId(),
+	)
 	output, err = doResticJob(ctx, job, secret, s.config.driver.config.KubeClient, 30)
 	if err != nil {
 		return fmt.Errorf("Error running restore snapshot job : %s : %s", err.Error(), output)

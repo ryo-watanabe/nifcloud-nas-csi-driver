@@ -67,7 +67,7 @@ func NewNifcloudNasDriver(config *NifcloudNasDriverConfig) (*NifcloudNasDriver, 
 	if config.Version == "" {
 		return nil, fmt.Errorf("driver version missing")
 	}
-	if config.NodeID == "" {
+	if config.NodeID == ""  && config.RunNode == true {
 		return nil, fmt.Errorf("node id missing")
 	}
 	if config.RunController == false && config.RunNode == false {
