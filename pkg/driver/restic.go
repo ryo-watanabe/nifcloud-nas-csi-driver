@@ -254,35 +254,31 @@ func (r *restic) resticJobDelete(snapshotId string) (*batchv1.Job, *corev1.Secre
 }
 
 // restic restore
-func (r *restic) resticJobRestore(snapId, restoreTarget, nodeName string) (*batchv1.Job, *corev1.Secret) {
+func (r *restic) resticJobRestore(snapId, ip, path, snapPath string) (*batchv1.Job, *corev1.Secret) {
 	// Job
 	job := r.resticJob("restic-job-restore-" + snapId, "default")
 	job.Spec.Template.Spec.Containers[0].Args = append(
 		job.Spec.Template.Spec.Containers[0].Args,
-		[]string{"restore", "-t", restoreTarget, snapId}...,
+		[]string{"restore", "-t", "/mnt", snapId}...,
 	)
-	hpType := corev1.HostPathDirectory
 	volume := corev1.Volume{
 		Name: "restore-target",
 		VolumeSource: corev1.VolumeSource{
-			HostPath: &corev1.HostPathVolumeSource{
-				Path: restoreTarget,
-				Type: &hpType,
+			NFS: &corev1.NFSVolumeSource{
+				Server: ip,
+				Path: path,
 			},
 		},
 	}
 	job.Spec.Template.Spec.Volumes = append(job.Spec.Template.Spec.Volumes, volume)
 	volumeMount := corev1.VolumeMount{
 		Name: "restore-target",
-		MountPath: restoreTarget,
+		MountPath: filepath.Join("/mnt", snapPath),
 	}
 	job.Spec.Template.Spec.Containers[0].VolumeMounts = append(
 		job.Spec.Template.Spec.Containers[0].VolumeMounts,
 		volumeMount,
 	)
-	job.Spec.Template.Spec.NodeSelector = map[string]string{
-		"kubernetes.io/hostname": nodeName,
-	}
 
 	return job, r.resticSecret("default")
 }

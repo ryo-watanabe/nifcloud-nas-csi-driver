@@ -17,7 +17,6 @@ spec:
         app: nifcloud-nas-csi-driver
     spec:
       serviceAccount: nifcloud-nas-csi-controller-sa
-      hostNetwork: true
       containers:
         - name: csi-external-provisioner
           imagePullPolicy: Always
@@ -47,13 +46,8 @@ spec:
           args:
             - "--v=4"
             - "--endpoint=unix:/csi/csi.sock"
-            - "--nodeid=$(KUBE_NODE_NAME)"
             - "--controller=true"
           env:
-            - name: KUBE_NODE_NAME
-              valueFrom:
-                fieldRef:
-                  fieldPath: spec.nodeName
             - name: AWS_ACCESS_KEY_ID
               valueFrom:
                 secretKeyRef:
@@ -67,13 +61,6 @@ spec:
           volumeMounts:
             - name: socket-dir
               mountPath: /csi
-            - name: host-tmp
-              mountPath: /tmp
-              mountPropagation: "Bidirectional"
       volumes:
-        - name: host-tmp
-          hostPath:
-            path: /tmp
-            type: Directory
         - name: socket-dir
           emptyDir: {}
