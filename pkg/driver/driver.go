@@ -41,7 +41,7 @@ type NifcloudNasDriverConfig struct {
 	RunController bool            // Run CSI controller service
 	RunNode       bool            // Run CSI node service
 	Mounter       mount.Interface // Mount library
-	Cloud         *cloud.Cloud    // Cloud provider
+	Cloud         cloud.Cloudiface    // Cloud provider
 	KubeClient    kubernetes.Interface  // k8s client
 	SnapClient    clientset.Interface  // snapshot client
 }

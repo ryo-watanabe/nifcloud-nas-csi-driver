@@ -74,7 +74,7 @@ func main() {
 		glog.Fatalf("Error building snapshot clientset: %s", err.Error())
 	}
 
-	var provider *cloud.Cloud
+	var provider cloud.Cloudiface
 	if *runController {
 		provider, err = cloud.NewCloud(*region)
 		if err != nil {

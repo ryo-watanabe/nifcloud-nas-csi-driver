@@ -66,7 +66,7 @@ type controllerServer struct {
 
 type controllerServerConfig struct {
 	driver *NifcloudNasDriver
-	cloud *cloud.Cloud
+	cloud cloud.Cloudiface
 	//metaService metadata.Service
 	ipAllocator *util.IPAllocator
 	nasNameHolder *util.InstanceNameHolder

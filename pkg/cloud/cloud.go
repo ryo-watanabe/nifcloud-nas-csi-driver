@@ -16,6 +16,20 @@ import (
 	"github.com/ryo-watanabe/nfcl-nas-csi-driver/pkg/util"
 )
 
+type Cloudiface interface {
+	GetNasInstance(ctx context.Context, name string) (*nas.NASInstance, error)
+	ListNasInstances(ctx context.Context) ([]nas.NASInstance, error)
+	CreateNasInstance(ctx context.Context, n *nas.CreateNASInstanceInput) (*nas.NASInstance, error)
+	ModifyNasInstance(ctx context.Context, name string) (*nas.NASInstance, error)
+	DeleteNasInstance(ctx context.Context, name string) error
+	GenerateVolumeIdFromNasInstance(obj *nas.NASInstance) string
+	GetNasInstanceFromVolumeId(ctx context.Context, id string) (*nas.NASInstance, error)
+	GetNasSecurityGroup(ctx context.Context, name string) (*nas.NASSecurityGroup, error)
+	CreateNasSecurityGroup(ctx context.Context, sc *nas.CreateNASSecurityGroupInput) (*nas.NASSecurityGroup, error)
+	AuthorizeCIDRIP(ctx context.Context, name, cidrip string) (*nas.NASSecurityGroup, error)
+	RevokeCIDRIP(ctx context.Context, name, cidrip string) (*nas.NASSecurityGroup, error)
+}
+
 type Cloud struct {
         //Session *session.Session
 	Nas *nas.Client
