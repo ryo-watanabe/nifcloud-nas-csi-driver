@@ -8,10 +8,10 @@ import (
 
 	"golang.org/x/net/context"
 
-        "github.com/aokumasan/nifcloud-sdk-go-v2/nifcloud"
+        "github.com/nifcloud/nifcloud-sdk-go/nifcloud"
 	"github.com/aws/aws-sdk-go-v2/aws/awserr"
-        "github.com/aokumasan/nifcloud-sdk-go-v2/service/computing"
-        "github.com/aokumasan/nifcloud-sdk-go-v2/service/nas"
+        "github.com/nifcloud/nifcloud-sdk-go/service/computing"
+        "github.com/nifcloud/nifcloud-sdk-go/service/nas"
 
 	"github.com/ryo-watanabe/nfcl-nas-csi-driver/pkg/util"
 )

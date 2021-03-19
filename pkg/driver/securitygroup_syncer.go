@@ -27,7 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/runtime"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/aokumasan/nifcloud-sdk-go-v2/service/nas"
+	"github.com/nifcloud/nifcloud-sdk-go/service/nas"
 	"github.com/ryo-watanabe/nfcl-nas-csi-driver/pkg/cloud"
 )
 

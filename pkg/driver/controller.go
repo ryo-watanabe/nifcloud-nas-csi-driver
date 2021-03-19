@@ -37,7 +37,7 @@ import (
 	"k8s.io/client-go/tools/cache"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 
-	"github.com/aokumasan/nifcloud-sdk-go-v2/service/nas"
+	"github.com/nifcloud/nifcloud-sdk-go/service/nas"
 	"github.com/ryo-watanabe/nfcl-nas-csi-driver/pkg/cloud"
 	"github.com/ryo-watanabe/nfcl-nas-csi-driver/pkg/util"
 )
