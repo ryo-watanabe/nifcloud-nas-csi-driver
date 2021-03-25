@@ -64,7 +64,7 @@ func getSecurityGroupName(ctx context.Context, driver *NifcloudNasDriver) (strin
 	// Get kube-system UID for NAS Security Group Name
 	clusterUID, err := getNamespaceUID(ctx, "kube-system", driver)
 	if err != nil {
-		return "", fmt.Errorf("Error getting namespace UUID: %S", err.Error())
+		return "", fmt.Errorf("Error getting namespace UUID: %s", err.Error())
 	}
 
 	return "cluster-" + clusterUID, nil

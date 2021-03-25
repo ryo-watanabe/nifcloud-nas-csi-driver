@@ -16,7 +16,7 @@ import (
 	"github.com/ryo-watanabe/nfcl-nas-csi-driver/pkg/util"
 )
 
-type Cloudiface interface {
+type Interface interface {
 	GetNasInstance(ctx context.Context, name string) (*nas.NASInstance, error)
 	ListNasInstances(ctx context.Context) ([]nas.NASInstance, error)
 	CreateNasInstance(ctx context.Context, n *nas.CreateNASInstanceInput) (*nas.NASInstance, error)

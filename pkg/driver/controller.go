@@ -66,7 +66,7 @@ type controllerServer struct {
 
 type controllerServerConfig struct {
 	driver *NifcloudNasDriver
-	cloud cloud.Cloudiface
+	cloud cloud.Interface
 	//metaService metadata.Service
 	ipAllocator *util.IPAllocator
 	nasNameHolder *util.InstanceNameHolder
@@ -159,6 +159,9 @@ func (s *controllerServer) waitForNASInstanceAvailable(name string) error {
 	b.RandomizationFactor = 0.2
 	b.Multiplier = 1.0
 	b.InitialInterval = 30 * time.Second
+	if s.config.driver.config.InitBackoff != 0 {
+		b.InitialInterval = s.config.driver.config.InitBackoff * time.Second
+	}
 	backoffCtx := context.TODO()
 
 	chkNasInstanceAvailable := func() error {
@@ -263,7 +266,7 @@ func (s *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 		var reservedIPv4CIDR string
 		reservedIPv4CIDR, err = getIpv4CiderFromPVC(ctx, req.GetName(), s.config.driver)
 		if err != nil {
-			err = status.Error(codes.InvalidArgument, "volume name invalid")
+			err = status.Error(codes.InvalidArgument, err.Error())
 			return
 		}
 		if reservedIPv4CIDR == "" {
@@ -771,7 +774,7 @@ func getSecretsFromSnapshotId(ctx context.Context, snapshotId string, driver *Ni
 		}
 	}
 	if className == "" {
-		return m, fmt.Errorf("Error snapshotId %d not found in volumesnapshotcontents : %s", snapshotId, err.Error())
+		return m, fmt.Errorf("Error snapshotId %s not found in volumesnapshotcontents : %s", snapshotId, err.Error())
 	}
 	class, err := snapClient.SnapshotV1beta1().VolumeSnapshotClasses().Get(ctx, className, metav1.GetOptions{})
 	if err != nil {
