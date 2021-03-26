@@ -28,31 +28,41 @@ func TestCreateVolume(t *testing.T) {
 	rand.Seed(1)
 	sharedSuffix := rand.String(5)
 
-	cases := []struct {
-		testname string
+	cases := map[string]struct {
 		req *csi.CreateVolumeRequest
 		res *csi.CreateVolumeResponse
 		errmsg string
 		shared bool
 	}{
-		{
-			testname: "valid volume",
+		"valid volume":{
 			req: initCreateVolumeResquest("pvc-TESTPVCUID", 10 * util.Gb, 0, "192.168.100.0/28"),
 			res: initCreateVolumeResponse("testregion/pvc-TESTPVCUID", 100 * util.Gb, "192.168.100.0/24", ""),
 		},
-		{
-			testname: "valid shared volume",
+		"volume with no name":{
+			req: initCreateVolumeResquest("", 0, 0, "0.0.0.0/32"),
+			errmsg: "CreateVolume name must be provided",
+		},
+		"unsupported access mode":{
+			req: initCreateVolumeResquest("pvc-TESTPVCUID", 0, 0, "0.0.0.0/32"),
+			errmsg: "driver does not support access mode",
+		},
+		"valid shared volume":{
 			req: initCreateVolumeResquest("pvc-TESTPVCUID", 10 * util.Gb, 0, "192.168.100.0/28"),
 			res: initCreateVolumeResponse("testregion/cluster-TESTCLUSTERUID-shd001-" + sharedSuffix + "/pvc-TESTPVCUID", 10 * util.Gb, "192.168.100.0/24", "pvc-TESTPVCUID"),
 			shared: true,
 		},
 	}
 
+	// additional params for tests
+	cases["unsupported access mode"].req.VolumeCapabilities[0].AccessMode = &csi.VolumeCapability_AccessMode{
+		Mode: csi.VolumeCapability_AccessMode_UNKNOWN,
+	}
+
 	flag.Set("logtostderr", "true")
 	flag.Lookup("v").Value.Set("4")
 	flag.Parse()
 
-	for _, c := range(cases) {
+	for name, c := range(cases) {
 		ctl := initTestController(t)
 		if c.shared {
 			c.req.Parameters["shared"] = "true"
@@ -61,15 +71,15 @@ func TestCreateVolume(t *testing.T) {
 		res, err := ctl.CreateVolume(context.TODO(), c.req)
 		if c.errmsg == "" {
 			if err != nil {
-				t.Errorf("Not expected error in case %s : %s", c.testname, err.Error())
+				t.Errorf("unexpected error in case [%s] : %s", name, err.Error())
 			} else if !reflect.DeepEqual(res, c.res) {
-				t.Errorf("Expected response: %v but got: %v in case %s", c.res, res, c.testname)
+				t.Errorf("result not matched in case [%s]\nexpected : %v\nbut got  : %v", name, c.res, res)
 			}
 		} else {
 			if err == nil {
-				t.Errorf("Expected error: %s not occured in case %s", c.errmsg, c.testname)
-			} else if err.Error() != c.errmsg {
-				t.Errorf("Expected error: %s but got: %s in case %s", c.errmsg, err.Error(), c.testname)
+				t.Errorf("expected error not occured in case [%s]\nexpected : %s", name, c.errmsg)
+			} else if !strings.Contains(err.Error(), c.errmsg) {
+				t.Errorf("error message not matched in case [%s]\nmust contains : %s\nbut got : %s", name, c.errmsg, err.Error())
 			}
 		}
 	}
