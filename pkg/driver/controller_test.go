@@ -19,8 +19,14 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/rand"
+	"k8s.io/client-go/kubernetes"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 	core "k8s.io/client-go/testing"
+)
+
+const (
+	volumeSize = 100 * util.Gb
+	volumeQnty = "100Gi"
 )
 
 func TestCreateVolume(t *testing.T) {
@@ -29,27 +35,55 @@ func TestCreateVolume(t *testing.T) {
 	sharedSuffix := rand.String(5)
 
 	cases := map[string]struct {
+		obj []runtime.Object
+		pre []*csi.CreateVolumeRequest
 		req *csi.CreateVolumeRequest
 		res *csi.CreateVolumeResponse
 		errmsg string
-		shared bool
 	}{
 		"valid volume":{
-			req: initCreateVolumeResquest("pvc-TESTPVCUID", 10 * util.Gb, 0, "192.168.100.0/28"),
-			res: initCreateVolumeResponse("testregion/pvc-TESTPVCUID", 100 * util.Gb, "192.168.100.0/24", ""),
+			obj: []runtime.Object{
+				newPVC("testpvc", "10Gi", "TESTPVCUID"),
+			},
+			req: initCreateVolumeResquest("pvc-TESTPVCUID", 10 * util.Gb, 0, "192.168.100.0/28", false),
+			res: initCreateVolumeResponse("testregion/pvc-TESTPVCUID", 100 * util.Gb, "192.168.100.0", ""),
 		},
 		"volume with no name":{
-			req: initCreateVolumeResquest("", 0, 0, "0.0.0.0/32"),
+			req: initCreateVolumeResquest("", 0, 0, "0.0.0.0/32", false),
 			errmsg: "CreateVolume name must be provided",
 		},
 		"unsupported access mode":{
-			req: initCreateVolumeResquest("pvc-TESTPVCUID", 0, 0, "0.0.0.0/32"),
+			req: initCreateVolumeResquest("pvc-TESTPVCUID", 0, 0, "0.0.0.0/32", false),
 			errmsg: "driver does not support access mode",
 		},
+		"take neighbor ip":{
+			obj: []runtime.Object{
+				newPVC("testpvc", volumeQnty, "TESTPVCUID"),
+				newPVC("testpvc-pre", volumeQnty, "TESTPVCUID-pre"),
+			},
+			pre: []*csi.CreateVolumeRequest{
+				initCreateVolumeResquest("pvc-TESTPVCUID-pre", volumeSize, 0, "192.168.100.0/28", false),
+			},
+			req: initCreateVolumeResquest("pvc-TESTPVCUID", volumeSize, 0, "192.168.100.0/28", false),
+			res: initCreateVolumeResponse("testregion/pvc-TESTPVCUID", volumeSize, "192.168.100.1", ""),
+		},
 		"valid shared volume":{
-			req: initCreateVolumeResquest("pvc-TESTPVCUID", 10 * util.Gb, 0, "192.168.100.0/28"),
-			res: initCreateVolumeResponse("testregion/cluster-TESTCLUSTERUID-shd001-" + sharedSuffix + "/pvc-TESTPVCUID", 10 * util.Gb, "192.168.100.0/24", "pvc-TESTPVCUID"),
-			shared: true,
+			obj: []runtime.Object{
+				newPVC("testpvc", volumeQnty, "TESTPVCUID"),
+			},
+			req: initCreateVolumeResquest("pvc-TESTPVCUID", volumeSize, 0, "192.168.100.0/28", true),
+			res: initCreateVolumeResponse("testregion/cluster-TESTCLUSTERUID-shd001-" + sharedSuffix + "/pvc-TESTPVCUID", volumeSize, "192.168.100.0", "pvc-TESTPVCUID"),
+		},
+		"room shared volume":{
+			obj: []runtime.Object{
+				newPVC("testpvc-pre", volumeQnty, "TESTPVCUID-pre"),
+				newPVC("testpvc", "10Gi", "TESTPVCUID"),
+			},
+			pre: []*csi.CreateVolumeRequest{
+				initCreateVolumeResquest("pvc-TESTPVCUID-pre", volumeSize, 0, "192.168.100.0/28", true),
+			},
+			req: initCreateVolumeResquest("pvc-TESTPVCUID", 10 * util.Gb, 0, "192.168.100.0/28", true),
+			res: initCreateVolumeResponse("testregion/cluster-TESTCLUSTERUID-shd001-" + sharedSuffix + "/pvc-TESTPVCUID", 10 * util.Gb, "192.168.100.0", "pvc-TESTPVCUID"),
 		},
 	}
 
@@ -63,11 +97,22 @@ func TestCreateVolume(t *testing.T) {
 	flag.Parse()
 
 	for name, c := range(cases) {
-		ctl := initTestController(t)
-		if c.shared {
-			c.req.Parameters["shared"] = "true"
-			c.req.Parameters["capacityParInstanceGiB"] = "500"
+		t.Logf("====== Test case [%s] :", name)
+		ctl, kubeClient := initTestController(t, c.obj)
+		// pre existing volumes
+		failed := false
+		for _, v := range(c.pre) {
+			err := createVolumeAndPV(ctl, v, kubeClient)
+			if err != nil {
+				t.Errorf("cannot create pre existing volume in case [%s] : %s", name, err.Error())
+				failed = true
+				break
+			}
 		}
+		if failed {
+			continue
+		}
+		// test the case
 		res, err := ctl.CreateVolume(context.TODO(), c.req)
 		if c.errmsg == "" {
 			if err != nil {
@@ -85,8 +130,75 @@ func TestCreateVolume(t *testing.T) {
 	}
 }
 
-func initCreateVolumeResquest(name string, capReq, capLim int64, cidr string) *csi.CreateVolumeRequest {
-	return &csi.CreateVolumeRequest{
+func TestDeleteVolume(t *testing.T) {
+
+	rand.Seed(1)
+	sharedSuffix := rand.String(5)
+
+	cases := map[string]struct {
+		obj []runtime.Object
+		pre []*csi.CreateVolumeRequest
+		req *csi.DeleteVolumeRequest
+		errmsg string
+	}{
+		"delete volume":{
+			obj: []runtime.Object{
+				newPVC("testpvc", volumeQnty, "TESTPVCUID"),
+			},
+			pre: []*csi.CreateVolumeRequest{
+				initCreateVolumeResquest("pvc-TESTPVCUID", volumeSize, 0, "192.168.100.0/28", false),
+			},
+			req: &csi.DeleteVolumeRequest{VolumeId: "testregion/pvc-TESTPVCUID"},
+		},
+		"delete shared volume":{
+			obj: []runtime.Object{
+				newPVC("testpvc", volumeQnty, "TESTPVCUID"),
+			},
+			pre: []*csi.CreateVolumeRequest{
+				initCreateVolumeResquest("pvc-TESTPVCUID", volumeSize, 0, "192.168.100.0/28", true),
+			},
+			req: &csi.DeleteVolumeRequest{VolumeId: "testregion/cluster-TESTCLUSTERUID-shd001-" + sharedSuffix + "/pvc-TESTPVCUID"},
+		},
+	}
+
+	flag.Set("logtostderr", "true")
+	flag.Lookup("v").Value.Set("4")
+	flag.Parse()
+
+	for name, c := range(cases) {
+		t.Logf("====== Test case [%s] :", name)
+		ctl, kubeClient := initTestController(t, c.obj)
+		// pre existing volumes
+		failed := false
+		for _, v := range(c.pre) {
+			err := createVolumeAndPV(ctl, v, kubeClient)
+			if err != nil {
+				t.Errorf("cannot create pre-existing volume in case [%s] : %s", name, err.Error())
+				failed = true
+				break
+			}
+		}
+		if failed {
+			continue
+		}
+		// test the case
+		_, err := ctl.DeleteVolume(context.TODO(), c.req)
+		if c.errmsg == "" {
+			if err != nil {
+				t.Errorf("unexpected error in case [%s] : %s", name, err.Error())
+			}
+		} else {
+			if err == nil {
+				t.Errorf("expected error not occured in case [%s]\nexpected : %s", name, c.errmsg)
+			} else if !strings.Contains(err.Error(), c.errmsg) {
+				t.Errorf("error message not matched in case [%s]\nmust contains : %s\nbut got : %s", name, c.errmsg, err.Error())
+			}
+		}
+	}
+}
+
+func initCreateVolumeResquest(name string, capReq, capLim int64, cidr string, shared bool) *csi.CreateVolumeRequest {
+	req := &csi.CreateVolumeRequest{
 		Name: name,
 		VolumeCapabilities: []*csi.VolumeCapability{
 			{
@@ -106,6 +218,11 @@ func initCreateVolumeResquest(name string, capReq, capLim int64, cidr string) *c
 			"reservedIpv4Cidr": cidr,
 		},
 	}
+	if shared {
+		req.Parameters["shared"] = "true"
+		req.Parameters["capacityParInstanceGiB"] = "500"
+	}
+	return req
 }
 
 func initCreateVolumeResponse(volumeID string, cap int64, ip, sourcePath string) *csi.CreateVolumeResponse {
@@ -121,13 +238,29 @@ func initCreateVolumeResponse(volumeID string, cap int64, ip, sourcePath string)
 	}
 }
 
-func initTestController(t *testing.T) csi.ControllerServer {
+func createVolumeAndPV(ctl csi.ControllerServer, req *csi.CreateVolumeRequest, kubeClient kubernetes.Interface) error {
+	res, err := ctl.CreateVolume(context.TODO(), req)
+	if err != nil {
+		return err
+	}
+	_, err = kubeClient.CoreV1().PersistentVolumes().Create(
+		context.TODO(),
+		newPV(req.Name, res.Volume.VolumeId, volumeQnty),
+		metav1.CreateOptions{},
+	)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func initTestController(t *testing.T, objects []runtime.Object) (csi.ControllerServer, kubernetes.Interface) {
 	// test cloud
 	cloud := newFakeCloud()
 	// test k8s
 	kubeobjects := []runtime.Object{}
 	kubeobjects = append(kubeobjects, newNamespace("kube-system", "TESTCLUSTERUID"))
-	kubeobjects = append(kubeobjects, newPVC("testpvc", "100Gi", "TESTPVCUID"))
+	kubeobjects = append(kubeobjects, objects...)
 	kubeClient := k8sfake.NewSimpleClientset(kubeobjects...)
 	// all jobs are created with status Complete
 	kubeClient.Fake.PrependReactor("create", "jobs", func(action core.Action) (bool, runtime.Object, error) {
@@ -142,7 +275,7 @@ func initTestController(t *testing.T) csi.ControllerServer {
 	rand.Seed(1)
 
 	driver := initTestDriver(t, cloud, kubeClient, true, false)
-	return driver.cs
+	return driver.cs, kubeClient
 }
 
 func newPVC(name, requestStorage, uid string) *corev1.PersistentVolumeClaim {
@@ -159,6 +292,24 @@ func newPVC(name, requestStorage, uid string) *corev1.PersistentVolumeClaim {
 			Resources: corev1.ResourceRequirements{
 				Requests: corev1.ResourceList{"storage":q},
 			},
+		},
+	}
+}
+
+func newPV(name, volumeHandle, storage string) *corev1.PersistentVolume {
+	q, _ := resource.ParseQuantity(storage)
+	return &corev1.PersistentVolume{
+		TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "PersistentVolume"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+		},
+		Spec: corev1.PersistentVolumeSpec{
+			PersistentVolumeSource: corev1.PersistentVolumeSource{
+				CSI: &corev1.CSIPersistentVolumeSource{
+					VolumeHandle: volumeHandle,
+				},
+			},
+			Capacity: corev1.ResourceList{"storage":q},
 		},
 	}
 }
@@ -213,6 +364,8 @@ func (c *FakeCloud) ListNasInstances(ctx context.Context) ([]nas.NASInstance, er
 
 func (c *FakeCloud) CreateNasInstance(ctx context.Context, in *nas.CreateNASInstanceInput) (*nas.NASInstance, error) {
 	storage := fmt.Sprintf("%d", *in.AllocatedStorage)
+	pIp := strings.SplitN(*in.MasterPrivateAddress, "/", 2)
+	ip := pIp[0]
 	n := nas.NASInstance{
 		AllocatedStorage: &storage,
 		AvailabilityZone: in.AvailabilityZone,
@@ -221,7 +374,7 @@ func (c *FakeCloud) CreateNasInstance(ctx context.Context, in *nas.CreateNASInst
 		NASSecurityGroups: []nas.NASSecurityGroup{
 			nas.NASSecurityGroup{NASSecurityGroupName: &in.NASSecurityGroups[0]},
 		},
-		Endpoint: &nas.Endpoint{PrivateAddress: in.MasterPrivateAddress},
+		Endpoint: &nas.Endpoint{PrivateAddress: &ip},
 		NetworkId: in.NetworkId,
 		Protocol: in.Protocol,
 		NASInstanceStatus: &statusCreating,
