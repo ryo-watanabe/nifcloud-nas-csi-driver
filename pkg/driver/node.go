@@ -80,11 +80,11 @@ type nodeServer struct {
 	mounter mount.Interface
 }
 
-func newNodeServer(driver *NifcloudNasDriver, mounter mount.Interface) (csi.NodeServer, error) {
+func newNodeServer(driver *NifcloudNasDriver, mounter mount.Interface) csi.NodeServer {
 	return &nodeServer{
 		driver:  driver,
 		mounter: mounter,
-	}, nil
+	}
 }
 
 // NodePublishVolume mounts the GCFS volume

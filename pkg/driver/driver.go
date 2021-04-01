@@ -41,9 +41,10 @@ type NifcloudNasDriverConfig struct {
 	RunController bool            // Run CSI controller service
 	RunNode       bool            // Run CSI node service
 	Mounter       mount.Interface // Mount library
-	Cloud         *cloud.Cloud    // Cloud provider
+	Cloud         cloud.Interface // Cloud provider
 	KubeClient    kubernetes.Interface  // k8s client
 	SnapClient    clientset.Interface  // snapshot client
+	InitBackoff   time.Duration
 }
 
 type NifcloudNasDriver struct {
@@ -90,17 +91,13 @@ func NewNifcloudNasDriver(config *NifcloudNasDriverConfig) (*NifcloudNasDriver, 
 
 	// Setup RPC servers
 	driver.ids = newIdentityServer(driver)
-	var err error
 	if config.RunNode {
 		nsc := []csi.NodeServiceCapability_RPC_Type{
 			csi.NodeServiceCapability_RPC_GET_VOLUME_STATS,
 		}
 		driver.addNodeServiceCapabilities(nsc)
 
-		driver.ns, err = newNodeServer(driver, config.Mounter)
-		if err != nil {
-			return nil, fmt.Errorf("error occured registering private IP: %s", err.Error())
-		}
+		driver.ns = newNodeServer(driver, config.Mounter)
 	}
 	if config.RunController {
 		csc := []csi.ControllerServiceCapability_RPC_Type{

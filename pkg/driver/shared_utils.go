@@ -72,7 +72,7 @@ func (s *controllerServer) convertSharedRequest(
 	// Get kube-system UID for cluster ID
 	clusterUID, err := getNamespaceUID(ctx, "kube-system", s.config.driver)
 	if err != nil {
-		return "", 0, fmt.Errorf("Error getting namespace UID: %S", err.Error())
+		return "", 0, fmt.Errorf("Error getting namespace UID: %s", err.Error())
 	}
 
 	// Search which NAS Instance the volume to settle in.
@@ -83,7 +83,7 @@ func (s *controllerServer) convertSharedRequest(
 		sharedName = sharedNamePrefix + fmt.Sprintf("%03d", i)
 		reservedBytes, err := getNasInstanceReservedCap(ctx, sharedName, s.config.driver)
 		if err != nil {
-			return "", 0, fmt.Errorf("Error getting reserved cap of shared nas: %S", err.Error())
+			return "", 0, fmt.Errorf("Error getting reserved cap of shared nas: %s", err.Error())
 		}
 		if reservedBytes == 0 {
 			// New shared nas
@@ -102,13 +102,13 @@ func (s *controllerServer) convertSharedRequest(
 		}
 		sharedName, err = getSharedNameFromExistingPv(ctx, sharedName, s.config.driver)
 		if err != nil {
-			return "", 0, fmt.Errorf("Error getting shared nas name: %S", err.Error())
+			return "", 0, fmt.Errorf("Error getting shared nas name: %s", err.Error())
 		}
 
 		// Check available caps
 		nas, err := s.config.driver.config.Cloud.GetNasInstance(ctx, sharedName)
 		if err != nil {
-			return "", 0, fmt.Errorf("Error getting nas instance: %S", err.Error())
+			return "", 0, fmt.Errorf("Error getting nas instance: %s", err.Error())
 		}
 		if capBytes <= getNasInstanceCapacityBytes(nas) - reservedBytes {
 			// Place this volume in this nas.
@@ -323,7 +323,7 @@ func doNfsJob(ctx context.Context, job *batchv1.Job, kubeClient kubernetes.Inter
 
 	// wait for job completed with backoff retry
 	b := backoff.NewExponentialBackOff()
-	b.MaxElapsedTime = time.Duration(30) * time.Minute
+	b.MaxElapsedTime = time.Duration(30) * time.Second
 	b.RandomizationFactor = 0.2
 	b.Multiplier = 2.0
 	b.InitialInterval = time.Duration(initInterval) * time.Second
