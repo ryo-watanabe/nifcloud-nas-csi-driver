@@ -4,21 +4,21 @@ import (
 	"testing"
 
 	"k8s.io/client-go/kubernetes"
-	"github.com/ryo-watanabe/nfcl-nas-csi-driver/pkg/cloud"
+	//"github.com/ryo-watanabe/nfcl-nas-csi-driver/pkg/cloud"
 )
 
 const testDriverName = "nas.csi.storage.nifcloud.com"
 
-func initTestDriver(t *testing.T, cloud cloud.Interface, kubeClient kubernetes.Interface, runc, runn bool) *NifcloudNasDriver {
+func initTestDriver(t *testing.T, cloud *FakeCloud, kubeClient kubernetes.Interface, runc, runn bool) *NifcloudNasDriver {
 	config := &NifcloudNasDriverConfig{
 		Name:          "testDriverName",
 		Version:       "testDriverVersion",
-		//NodeID:        *nodeID,
+		NodeID:        "testNodeID",
 		//PrivateIfName: *privateIfName,
 		RunController: runc,
 		RunNode:       runn,
 		//Mounter:       mounter,
-		Cloud:         newFakeCloud(),
+		Cloud:         cloud,
 		KubeClient:    kubeClient,
 		//SnapClient:    snapClient,
 		InitBackoff:   1,

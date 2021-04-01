@@ -197,32 +197,107 @@ func TestDeleteVolume(t *testing.T) {
 	}
 }
 
+func TestValidateVolumeCapabilities(t *testing.T) {
+
+	cases := map[string]struct {
+		obj []runtime.Object
+		pre []*csi.CreateVolumeRequest
+		req *csi.ValidateVolumeCapabilitiesRequest
+		errmsg string
+	}{
+		"valid volume":{
+			obj: []runtime.Object{
+				newPVC("testpvc", volumeQnty, "TESTPVCUID"),
+			},
+			pre: []*csi.CreateVolumeRequest{
+				initCreateVolumeResquest("pvc-TESTPVCUID", volumeSize, 0, "192.168.100.0/28", false),
+			},
+			req: &csi.ValidateVolumeCapabilitiesRequest{VolumeId: "testregion/pvc-TESTPVCUID", VolumeCapabilities: initVolumeCapabilities()},
+		},
+		"volume not found":{
+			req: &csi.ValidateVolumeCapabilitiesRequest{VolumeId: "testregion/pvc-TESTPVCUID", VolumeCapabilities: initVolumeCapabilities()},
+			errmsg: "NotFound",
+		},
+		"unsupported access mode":{
+			obj: []runtime.Object{
+				newPVC("testpvc", volumeQnty, "TESTPVCUID"),
+			},
+			pre: []*csi.CreateVolumeRequest{
+				initCreateVolumeResquest("pvc-TESTPVCUID", volumeSize, 0, "192.168.100.0/28", false),
+			},
+			req: &csi.ValidateVolumeCapabilitiesRequest{VolumeId: "testregion/pvc-TESTPVCUID", VolumeCapabilities: initVolumeCapabilities()},
+			errmsg: "driver does not support access mode",
+		},
+	}
+
+	// additional params for tests
+	cases["unsupported access mode"].req.VolumeCapabilities[0].AccessMode = &csi.VolumeCapability_AccessMode{
+		Mode: csi.VolumeCapability_AccessMode_UNKNOWN,
+	}
+
+	flag.Set("logtostderr", "true")
+	flag.Lookup("v").Value.Set("4")
+	flag.Parse()
+
+	for name, c := range(cases) {
+		t.Logf("====== Test case [%s] :", name)
+		ctl, kubeClient := initTestController(t, c.obj)
+		// pre existing volumes
+		failed := false
+		for _, v := range(c.pre) {
+			err := createVolumeAndPV(ctl, v, kubeClient)
+			if err != nil {
+				t.Errorf("cannot create pre-existing volume in case [%s] : %s", name, err.Error())
+				failed = true
+				break
+			}
+		}
+		if failed {
+			continue
+		}
+		// test the case
+		_, err := ctl.ValidateVolumeCapabilities(context.TODO(), c.req)
+		if c.errmsg == "" {
+			if err != nil {
+				t.Errorf("unexpected error in case [%s] : %s", name, err.Error())
+			}
+		} else {
+			if err == nil {
+				t.Errorf("expected error not occured in case [%s]\nexpected : %s", name, c.errmsg)
+			} else if !strings.Contains(err.Error(), c.errmsg) {
+				t.Errorf("error message not matched in case [%s]\nmust contains : %s\nbut got : %s", name, c.errmsg, err.Error())
+			}
+		}
+	}
+}
+
+// test utils
+
 func initCreateVolumeResquest(name string, capReq, capLim int64, cidr string, shared bool) *csi.CreateVolumeRequest {
 	req := &csi.CreateVolumeRequest{
 		Name: name,
-		VolumeCapabilities: []*csi.VolumeCapability{
-			{
-				AccessType: &csi.VolumeCapability_Mount{
-					Mount: &csi.VolumeCapability_MountVolume{},
-				},
-				AccessMode: &csi.VolumeCapability_AccessMode{
-					Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
-				},
-			},
-		},
-		CapacityRange: &csi.CapacityRange{
-			RequiredBytes: capReq,
-			LimitBytes: capLim,
-		},
-		Parameters: map[string]string{
-			"reservedIpv4Cidr": cidr,
-		},
+		VolumeCapabilities: initVolumeCapabilities(),
+		CapacityRange: &csi.CapacityRange{RequiredBytes: capReq, LimitBytes: capLim},
+		Parameters: map[string]string{"reservedIpv4Cidr": cidr},
 	}
 	if shared {
 		req.Parameters["shared"] = "true"
 		req.Parameters["capacityParInstanceGiB"] = "500"
 	}
 	return req
+}
+
+func initVolumeCapabilities() []*csi.VolumeCapability {
+	return []*csi.VolumeCapability{
+		{
+			AccessType: &csi.VolumeCapability_Mount{
+				Mount: &csi.VolumeCapability_MountVolume{},
+			},
+			AccessMode: &csi.VolumeCapability_AccessMode{
+				Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+			},
+		},
+	}
 }
 
 func initCreateVolumeResponse(volumeID string, cap int64, ip, sourcePath string) *csi.CreateVolumeResponse {
@@ -327,6 +402,7 @@ func newNamespace(name, uid string) *corev1.Namespace {
 type FakeCloud struct {
 	NasInstances []nas.NASInstance
 	NasSecurityGroups []nas.NASSecurityGroup
+	Actions []string
 	waitCnt int
 }
 
@@ -340,11 +416,15 @@ var (
 	statusAvailable = "available"
 	statusCreating = "creating"
 	statusModifying = "modifying"
+	statusAuthorizing = "authorizing"
+	statusAuthorized = "authorized"
+	statusRevoking = "revoking"
 	valueTrue = "true"
 	valueFalse = "false"
 )
 
 func (c *FakeCloud) GetNasInstance(ctx context.Context, name string) (*nas.NASInstance, error) {
+	c.Actions = append(c.Actions, "GetNasInstance/" + name)
 	for i, n := range(c.NasInstances) {
 		if *n.NASInstanceIdentifier == name {
 			c.waitCnt--
@@ -359,10 +439,12 @@ func (c *FakeCloud) GetNasInstance(ctx context.Context, name string) (*nas.NASIn
 }
 
 func (c *FakeCloud) ListNasInstances(ctx context.Context) ([]nas.NASInstance, error) {
+	c.Actions = append(c.Actions, "ListNasInstances")
 	return c.NasInstances, nil
 }
 
 func (c *FakeCloud) CreateNasInstance(ctx context.Context, in *nas.CreateNASInstanceInput) (*nas.NASInstance, error) {
+	c.Actions = append(c.Actions, "CreateNasInstance/" + *in.NASInstanceIdentifier)
 	storage := fmt.Sprintf("%d", *in.AllocatedStorage)
 	pIp := strings.SplitN(*in.MasterPrivateAddress, "/", 2)
 	ip := pIp[0]
@@ -386,6 +468,7 @@ func (c *FakeCloud) CreateNasInstance(ctx context.Context, in *nas.CreateNASInst
 }
 
 func (c *FakeCloud) ModifyNasInstance(ctx context.Context, name string) (*nas.NASInstance, error) {
+	c.Actions = append(c.Actions, "ModifyNasInstance/" + name)
 	for i, n := range(c.NasInstances) {
 		if *n.NASInstanceIdentifier == name {
 			c.NasInstances[i].NASInstanceStatus = &statusModifying
@@ -398,55 +481,21 @@ func (c *FakeCloud) ModifyNasInstance(ctx context.Context, name string) (*nas.NA
 }
 
 func (c *FakeCloud) DeleteNasInstance(ctx context.Context, name string) error {
+	c.Actions = append(c.Actions, "DeleteNasInstance/" + name)
 	return nil
 }
 
 func (c *FakeCloud) GenerateVolumeIdFromNasInstance(obj *nas.NASInstance) string {
+	c.Actions = append(c.Actions, "GenerateVolumeIdFromNasInstance/" + *obj.NASInstanceIdentifier)
 	return "testregion/" + *obj.NASInstanceIdentifier
 }
 
 func (c *FakeCloud) GetNasInstanceFromVolumeId(ctx context.Context, id string) (*nas.NASInstance, error) {
+	c.Actions = append(c.Actions, "GetNasInstanceFromVolumeId/" + id)
 	tokens := strings.Split(id, "/")
 	if len(tokens) != 2 {
 		return nil, fmt.Errorf("volume id %q unexpected format: got %v tokens", id, len(tokens))
 	}
 
 	return c.GetNasInstance(ctx, tokens[1])
-}
-
-func (c *FakeCloud) GetNasSecurityGroup(ctx context.Context, name string) (*nas.NASSecurityGroup, error) {
-	for _, g := range(c.NasSecurityGroups) {
-		if *g.NASSecurityGroupName == name {
-			return &g, nil
-		}
-	}
-	return nil, awserr.New("TestAwsErrorNotFound", "", fmt.Errorf("NASInstance %s not found", name))
-}
-
-func (c *FakeCloud) CreateNasSecurityGroup(ctx context.Context, sc *nas.CreateNASSecurityGroupInput) (*nas.NASSecurityGroup, error) {
-	g := nas.NASSecurityGroup{
-		AvailabilityZone: sc.AvailabilityZone,
-		NASSecurityGroupName: sc.NASSecurityGroupName,
-	}
-	return &g, nil
-}
-
-func (c *FakeCloud) AuthorizeCIDRIP(ctx context.Context, name, cidrip string) (*nas.NASSecurityGroup, error) {
-	for _, g := range(c.NasSecurityGroups) {
-		if *g.NASSecurityGroupName == name {
-			// TODO: authorize
-			return &g, nil
-		}
-	}
-	return nil, awserr.New("TestAwsErrorNotFound", "", fmt.Errorf("NASInstance %s not found", name))
-}
-
-func (c *FakeCloud) RevokeCIDRIP(ctx context.Context, name, cidrip string) (*nas.NASSecurityGroup, error) {
-	for _, g := range(c.NasSecurityGroups) {
-		if g.NASSecurityGroupName == &name {
-			// TODO: revoke
-			return &g, nil
-		}
-	}
-	return nil, awserr.New("TestAwsErrorNotFound", "", fmt.Errorf("NASInstance %s not found", name))
 }
