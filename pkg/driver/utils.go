@@ -1,56 +1,62 @@
-/*
-Copyright 2018 The Kubernetes Authors.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
-package util
+package driver
 
 import (
 	"fmt"
 	"net"
 	"sync"
+	"github.com/golang/glog"
 )
 
+// Instance name holder
+
+type InstanceNameHolder struct {
+	creatingInstanceNames map[string]bool
+	creatingInstanceMutex sync.Mutex
+}
+
+func newInstanceNameHolder() *InstanceNameHolder {
+	names := make(map[string]bool)
+	return &InstanceNameHolder {
+		creatingInstanceNames: names,
+	}
+}
+
+func (c *InstanceNameHolder) SetCreating(name string) error {
+	c.creatingInstanceMutex.Lock()
+	defer c.creatingInstanceMutex.Unlock()
+	if _, ok := c.creatingInstanceNames[name]; ok {
+		return fmt.Errorf("Instance %s is about to create in other Create request", name)
+	}
+	c.creatingInstanceNames[name] = true
+	return nil
+}
+
+func (c *InstanceNameHolder) IsCreating(name string) bool {
+	_, ok := c.creatingInstanceNames[name]
+	return ok
+}
+
+func (c *InstanceNameHolder) UnsetCreating(name string) {
+	c.creatingInstanceMutex.Lock()
+	defer c.creatingInstanceMutex.Unlock()
+	delete(c.creatingInstanceNames, name)
+}
+
+// ip allocator
+
 const (
-	// Size of the network address of the IPRange we intend to reserve
-	//ipRangeSize = 29
-	// Maximum value of a byte
 	byteMax = 255
-	// Total number of bits in an IPV4 address
 	ipV4Bits = 32
 )
 
-//var (
-	// step size for IP range increment
-	//incrementStep29IPRange = (byte)(math.Exp2(ipV4Bits - ipRangeSize))
-	// mask for IP range
-	//ipRangeMask = net.CIDRMask(ipRangeSize, ipV4Bits)
-//)
-
 // IPAllocator struct consists of shared resources that are used to keep track of the /29 IPRanges currently reserved by service instances
 type IPAllocator struct {
-	// pendingIPs set maintains the set of  IPs that have been reserved by the service instances but pending reservation in the cloud instances
 	pendingIPs map[string]bool
-
-	// pendingIPsMutex is used to synchronize access to the pendingIPRs set to prevent data races
 	pendingIPsMutex sync.Mutex
 }
 
 // NewIPAllocator is the constructor to initialize the IPAllocator object
-// Argument pendingIPs map[string]bool is a set of IPs currently reserved by service instances but pending reservation in the cloud instances
-func NewIPAllocator(pendingIPs map[string]bool) *IPAllocator {
-	// Make a copy of the pending IP ranges and set it in the IPAllocator so that the caller cannot mutate this map outside the library
+func newIPAllocator(pendingIPs map[string]bool) *IPAllocator {
 	pendingIPsCopy := make(map[string]bool)
 	for pendingIP := range pendingIPs {
 		pendingIPsCopy[pendingIP] = true
@@ -140,4 +146,52 @@ func cloneIP(ip net.IP) net.IP {
 	clone := make(net.IP, len(ip))
 	copy(clone, ip)
 	return clone
+}
+
+// resource_queue
+
+type OperateResourceQueue struct {
+	name string
+	resources map[string]bool
+	queueMutex sync.Mutex
+}
+
+func newOperateResourceQueue(name string) *OperateResourceQueue {
+	rs := make(map[string]bool)
+	return &OperateResourceQueue {
+		name: name,
+		resources: rs,
+	}
+}
+
+func (q *OperateResourceQueue) Queue(name string) error {
+	if _, ok := q.resources[name]; ok {
+		return fmt.Errorf("Duplicate Queue called for %s in %s", name, q.name)
+	}
+	q.resources[name] = false
+	q.queueMutex.Lock()
+	q.resources[name] = true
+	return nil
+}
+
+func (q *OperateResourceQueue) Show() {
+	if len(q.resources) == 0 {
+		glog.V(4).Infof("No resources Operating/Pending in %s", q.name)
+	}
+	for name, operating := range q.resources {
+		state := "Pending"
+		if operating {
+			state = "Operating"
+		}
+		glog.V(4).Infof("Resource %s %s in %s", name, state, q.name)
+	}
+}
+
+func (q *OperateResourceQueue) UnsetQueue(name string) {
+	operating, ok := q.resources[name]
+	if !ok || !operating {
+		return
+	}
+	delete(q.resources, name)
+	q.queueMutex.Unlock()
 }
