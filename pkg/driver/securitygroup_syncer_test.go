@@ -7,8 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	//csi "github.com/container-storage-interface/spec/lib/go/csi"
-	//corev1 "k8s.io/api/core/v1"
 	"golang.org/x/net/context"
 	"github.com/aws/aws-sdk-go-v2/aws/awserr"
 	"github.com/nifcloud/nifcloud-sdk-go/service/nas"
@@ -17,7 +15,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
-	//core "k8s.io/client-go/testing"
 )
 
 var (
@@ -91,6 +88,8 @@ func TestSecuritygroupSync(t *testing.T) {
 					nas.IPRange{CIDRIP: &testCidrIP1, Status: &statusAuthorizing},
 				},
 			}},
+			last_sgs: &lastSGInputs,
+			last_ips: &lastIPs,
 			exp_sgs: []nas.NASSecurityGroup{nas.NASSecurityGroup{
 				AvailabilityZone: &testZone,
 				NASSecurityGroupName: &testSecurityGroupName,
@@ -113,6 +112,8 @@ func TestSecuritygroupSync(t *testing.T) {
 					nas.IPRange{CIDRIP: &testCidrIP1, Status: &statusAuthorized},
 				},
 			}},
+			last_sgs: &lastSGInputs,
+			last_ips: &lastIPs,
 			exp_sgs: []nas.NASSecurityGroup{nas.NASSecurityGroup{
 				AvailabilityZone: &testZone,
 				NASSecurityGroupName: &testSecurityGroupName,

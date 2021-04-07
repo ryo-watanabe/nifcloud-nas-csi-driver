@@ -39,6 +39,7 @@ func TestCreateVolume(t *testing.T) {
 		pre []*csi.CreateVolumeRequest
 		req *csi.CreateVolumeRequest
 		res *csi.CreateVolumeResponse
+		job_failed bool
 		errmsg string
 	}{
 		"valid volume":{
@@ -85,6 +86,15 @@ func TestCreateVolume(t *testing.T) {
 			req: initCreateVolumeResquest("pvc-TESTPVCUID", 10 * util.Gb, 0, "192.168.100.0/28", true),
 			res: initCreateVolumeResponse("testregion/cluster-TESTCLUSTERUID-shd001-" + sharedSuffix + "/pvc-TESTPVCUID", 10 * util.Gb, "192.168.100.0", "pvc-TESTPVCUID"),
 		},
+		"making source path job failed":{
+			obj: []runtime.Object{
+				newPVC("testpvc", volumeQnty, "TESTPVCUID"),
+				newPod("jobpod", "default", "cluster-TESTCLUSTERUID-shd001-" + sharedSuffix),
+			},
+			req: initCreateVolumeResquest("pvc-TESTPVCUID", volumeSize, 0, "192.168.100.0/28", true),
+			job_failed: true,
+			errmsg: "error making source path for shared NASInstance:fake logs",
+		},
 	}
 
 	// additional params for tests
@@ -98,7 +108,7 @@ func TestCreateVolume(t *testing.T) {
 
 	for name, c := range(cases) {
 		t.Logf("====== Test case [%s] :", name)
-		ctl, kubeClient := initTestController(t, c.obj)
+		ctl, kubeClient := initTestController(t, c.obj, c.job_failed)
 		// pre existing volumes
 		failed := false
 		for _, v := range(c.pre) {
@@ -167,7 +177,7 @@ func TestDeleteVolume(t *testing.T) {
 
 	for name, c := range(cases) {
 		t.Logf("====== Test case [%s] :", name)
-		ctl, kubeClient := initTestController(t, c.obj)
+		ctl, kubeClient := initTestController(t, c.obj, false)
 		// pre existing volumes
 		failed := false
 		for _, v := range(c.pre) {
@@ -241,7 +251,7 @@ func TestValidateVolumeCapabilities(t *testing.T) {
 
 	for name, c := range(cases) {
 		t.Logf("====== Test case [%s] :", name)
-		ctl, kubeClient := initTestController(t, c.obj)
+		ctl, kubeClient := initTestController(t, c.obj, false)
 		// pre existing volumes
 		failed := false
 		for _, v := range(c.pre) {
@@ -329,7 +339,7 @@ func createVolumeAndPV(ctl csi.ControllerServer, req *csi.CreateVolumeRequest, k
 	return nil
 }
 
-func initTestController(t *testing.T, objects []runtime.Object) (csi.ControllerServer, kubernetes.Interface) {
+func initTestController(t *testing.T, objects []runtime.Object, job_failed bool) (csi.ControllerServer, kubernetes.Interface) {
 	// test cloud
 	cloud := newFakeCloud()
 	// test k8s
@@ -338,11 +348,15 @@ func initTestController(t *testing.T, objects []runtime.Object) (csi.ControllerS
 	kubeobjects = append(kubeobjects, objects...)
 	kubeClient := k8sfake.NewSimpleClientset(kubeobjects...)
 	// all jobs are created with status Complete
+	jobCondition :=  batchv1.JobComplete
+	if job_failed {
+		jobCondition = batchv1.JobFailed
+	}
 	kubeClient.Fake.PrependReactor("create", "jobs", func(action core.Action) (bool, runtime.Object, error) {
 		obj := action.(core.CreateAction).GetObject()
 		job, _ := obj.(*batchv1.Job)
 		job.Status.Conditions = []batchv1.JobCondition{
-			batchv1.JobCondition{Type: "Complete"},
+			batchv1.JobCondition{Type: jobCondition},
 		}
 		return false, job, nil
 	})
@@ -385,6 +399,19 @@ func newPV(name, volumeHandle, storage string) *corev1.PersistentVolume {
 				},
 			},
 			Capacity: corev1.ResourceList{"storage":q},
+		},
+	}
+}
+
+func newPod(name, namespace, owner string) *corev1.Pod {
+	return &corev1.Pod{
+		TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Pod"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+			OwnerReferences: []metav1.OwnerReference{
+				metav1.OwnerReference{Name: owner},
+			},
 		},
 	}
 }

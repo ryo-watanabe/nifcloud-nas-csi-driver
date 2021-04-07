@@ -31,6 +31,9 @@ type ResticSnapshot struct {
 }
 
 func (snap *ResticSnapshot) GetSourceVolumeId() string {
+	if len(snap.Paths) == 0 {
+		return ""
+	}
 	_, file := filepath.Split(snap.Paths[0])
 	return file
 }
@@ -112,6 +115,10 @@ func retryNotifyRestic(err error, wait time.Duration) {
 	glog.Infof("%s : will be checked again in %.2f seconds", err.Error(), wait.Seconds())
 }
 
+var (
+	test_restic_pod_log = map[string]string{}
+)
+
 // execute restic Job with backing off
 func doResticJob(ctx context.Context, job *batchv1.Job, secret *corev1.Secret, kubeClient kubernetes.Interface, initInterval int) (string, error) {
 
@@ -184,21 +191,18 @@ func doResticJob(ctx context.Context, job *batchv1.Job, secret *corev1.Secret, k
 			out := ""
 			for {
 				line, err := reader.ReadString('\n')
-				//fmt.Println("[LINE]:" + line)
 				if line != "" {
 					out = line
+					// for test
+					if strings.Contains(out, "fake logs") {
+						out = test_restic_pod_log[name]
+					}
 				}
 				if err != nil || strings.Contains(out, "summary") {
 					break
 				}
 			}
 			return out, nil
-			//buf := new(bytes.Buffer)
-			//_, err = io.Copy(buf, podLogs)
-			//if err != nil {
-			//	return "", fmt.Errorf("Logs IO error - %s", err.Error())
-			//}
-			//return buf.String(), nil
 		}
 	}
 	return "", fmt.Errorf("Cannot find pod for job %s", name)
