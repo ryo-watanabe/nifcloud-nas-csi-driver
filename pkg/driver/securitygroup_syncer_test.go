@@ -23,12 +23,16 @@ var (
 	testCidrIP1 = "1.1.1.1/32"
 	testCidrIP2 = "1.1.1.2/32"
 	testCidrIP3 = "1.1.1.3/32"
-	preObjects = []runtime.Object{
-		newCSINode("testNodeID1", "1.1.1.1"),
-		newCSINode("testNodeID2", "1.1.1.2"),
-		newStorageClass("testStorageClass", testZone),
+	lastSGInputs = map[string]nas.CreateNASSecurityGroupInput{
+		testSecurityGroupName: nas.CreateNASSecurityGroupInput{
+			AvailabilityZone: &testZone,
+			NASSecurityGroupName: &testSecurityGroupName,
+		},
 	}
-	preSecurityGroup = nas.NASSecurityGroup{
+)
+
+func initSecurityGroup() nas.NASSecurityGroup {
+	return nas.NASSecurityGroup{
 		AvailabilityZone: &testZone,
 		NASSecurityGroupName: &testSecurityGroupName,
 		IPRanges: []nas.IPRange{
@@ -36,17 +40,22 @@ var (
 			nas.IPRange{CIDRIP: &testCidrIP2, Status: &statusAuthorized},
 		},
 	}
-	lastSGInputs = map[string]nas.CreateNASSecurityGroupInput{
-		testSecurityGroupName: nas.CreateNASSecurityGroupInput{
-			AvailabilityZone: &testZone,
-			NASSecurityGroupName: &testSecurityGroupName,
-		},
+}
+
+func initObjects() []runtime.Object {
+	return []runtime.Object{
+		newCSINode("testNodeID1", "1.1.1.1"),
+		newCSINode("testNodeID2", "1.1.1.2"),
+		newStorageClass("testStorageClass", testZone),
 	}
-	lastIPs = map[string]bool{
+}
+
+func initLastIPs() *map[string]bool {
+	return &map[string]bool{
 		"1.1.1.1": true,
 		"1.1.1.2": true,
 	}
-)
+}
 
 func TestSecuritygroupSync(t *testing.T) {
 
@@ -58,12 +67,14 @@ func TestSecuritygroupSync(t *testing.T) {
 		last_ips *map[string]bool
 		errmsg string
 		exp_sgs []nas.NASSecurityGroup
+		alt_sgs []nas.NASSecurityGroup
 		actions []string
+		alt_act []string
 		post_tsk bool
 	}{
 		"initialization1":{
 			pre_tsk: true,
-			pre_obj: preObjects,
+			pre_obj: initObjects(),
 			exp_sgs: []nas.NASSecurityGroup{nas.NASSecurityGroup{
 				AvailabilityZone: &testZone,
 				NASSecurityGroupName: &testSecurityGroupName,
@@ -71,16 +82,28 @@ func TestSecuritygroupSync(t *testing.T) {
 					nas.IPRange{CIDRIP: &testCidrIP1, Status: &statusAuthorizing},
 				},
 			}},
+			alt_sgs: []nas.NASSecurityGroup{nas.NASSecurityGroup{
+				AvailabilityZone: &testZone,
+				NASSecurityGroupName: &testSecurityGroupName,
+				IPRanges: []nas.IPRange{
+					nas.IPRange{CIDRIP: &testCidrIP2, Status: &statusAuthorizing},
+				},
+			}},
 			actions: []string{
 				"GetNasSecurityGroup/" + testSecurityGroupName,
 				"CreateNasSecurityGroup/" + testSecurityGroupName,
 				"AuthorizeCIDRIP/" + testSecurityGroupName + "/1.1.1.1/32",
 			},
+			alt_act: []string{
+				"GetNasSecurityGroup/" + testSecurityGroupName,
+				"CreateNasSecurityGroup/" + testSecurityGroupName,
+				"AuthorizeCIDRIP/" + testSecurityGroupName + "/1.1.1.2/32",
+			},
 			post_tsk: true,
 		},
 		"initialization2 wait authorizing ip1":{
 			pre_tsk: true,
-			pre_obj: preObjects,
+			pre_obj: initObjects(),
 			pre_sgs: []nas.NASSecurityGroup{nas.NASSecurityGroup{
 				AvailabilityZone: &testZone,
 				NASSecurityGroupName: &testSecurityGroupName,
@@ -89,7 +112,7 @@ func TestSecuritygroupSync(t *testing.T) {
 				},
 			}},
 			last_sgs: &lastSGInputs,
-			last_ips: &lastIPs,
+			last_ips: initLastIPs(),
 			exp_sgs: []nas.NASSecurityGroup{nas.NASSecurityGroup{
 				AvailabilityZone: &testZone,
 				NASSecurityGroupName: &testSecurityGroupName,
@@ -104,7 +127,7 @@ func TestSecuritygroupSync(t *testing.T) {
 		},
 		"initialization3 authorize ip2":{
 			pre_tsk: true,
-			pre_obj: preObjects,
+			pre_obj: initObjects(),
 			pre_sgs: []nas.NASSecurityGroup{nas.NASSecurityGroup{
 				AvailabilityZone: &testZone,
 				NASSecurityGroupName: &testSecurityGroupName,
@@ -113,7 +136,7 @@ func TestSecuritygroupSync(t *testing.T) {
 				},
 			}},
 			last_sgs: &lastSGInputs,
-			last_ips: &lastIPs,
+			last_ips: initLastIPs(),
 			exp_sgs: []nas.NASSecurityGroup{nas.NASSecurityGroup{
 				AvailabilityZone: &testZone,
 				NASSecurityGroupName: &testSecurityGroupName,
@@ -130,11 +153,11 @@ func TestSecuritygroupSync(t *testing.T) {
 		},
 		"nothing changed (initializing4 completed)":{
 			pre_tsk: true,
-			pre_obj: preObjects,
-			pre_sgs: []nas.NASSecurityGroup{preSecurityGroup},
+			pre_obj: initObjects(),
+			pre_sgs: []nas.NASSecurityGroup{initSecurityGroup()},
 			last_sgs: &lastSGInputs,
-			last_ips: &lastIPs,
-			exp_sgs: []nas.NASSecurityGroup{preSecurityGroup},
+			last_ips: initLastIPs(),
+			exp_sgs: []nas.NASSecurityGroup{initSecurityGroup()},
 			actions: []string{
 				"GetNasSecurityGroup/" + testSecurityGroupName,
 			},
@@ -148,9 +171,9 @@ func TestSecuritygroupSync(t *testing.T) {
 				newCSINode("testNodeID3", "1.1.1.3"),
 				newStorageClass("testStorageClass", testZone),
 			},
-			pre_sgs: []nas.NASSecurityGroup{preSecurityGroup},
+			pre_sgs: []nas.NASSecurityGroup{initSecurityGroup()},
 			last_sgs: &lastSGInputs,
-			last_ips: &lastIPs,
+			last_ips: initLastIPs(),
 			exp_sgs: []nas.NASSecurityGroup{nas.NASSecurityGroup{
 				AvailabilityZone: &testZone,
 				NASSecurityGroupName: &testSecurityGroupName,
@@ -172,9 +195,9 @@ func TestSecuritygroupSync(t *testing.T) {
 				newCSINode("testNodeID1", "1.1.1.1"),
 				newStorageClass("testStorageClass", testZone),
 			},
-			pre_sgs: []nas.NASSecurityGroup{preSecurityGroup},
+			pre_sgs: []nas.NASSecurityGroup{initSecurityGroup()},
 			last_sgs: &lastSGInputs,
-			last_ips: &lastIPs,
+			last_ips: initLastIPs(),
 			exp_sgs: []nas.NASSecurityGroup{nas.NASSecurityGroup{
 				AvailabilityZone: &testZone,
 				NASSecurityGroupName: &testSecurityGroupName,
@@ -205,7 +228,7 @@ func TestSecuritygroupSync(t *testing.T) {
 				},
 			}},
 			last_sgs: &lastSGInputs,
-			last_ips: &lastIPs,
+			last_ips: initLastIPs(),
 			exp_sgs: []nas.NASSecurityGroup{nas.NASSecurityGroup{
 				AvailabilityZone: &testZone,
 				NASSecurityGroupName: &testSecurityGroupName,
@@ -237,10 +260,18 @@ func TestSecuritygroupSync(t *testing.T) {
 				t.Errorf("unexpected error in case [%s] : %s", name, err.Error())
 			} else {
 				if !reflect.DeepEqual(c.exp_sgs, cloud.NasSecurityGroups) {
-					t.Errorf("security group not matched in case [%s]\nexpected : %v\nbut got  : %v", name, c.exp_sgs, cloud.NasSecurityGroups)
+					if len(c.alt_sgs) > 0 && reflect.DeepEqual(c.alt_sgs, cloud.NasSecurityGroups) {
+						t.Logf("security group matched alt_sgs")
+					} else {
+						t.Errorf("security group not matched in case [%s]\nexpected : %v\nbut got  : %v", name, c.exp_sgs, cloud.NasSecurityGroups)
+					}
 				}
 				if !reflect.DeepEqual(c.actions, cloud.Actions) {
-					t.Errorf("cloud action not matched in case [%s]\nexpected : %v\nbut got  : %v", name, c.actions, cloud.Actions)
+					if len(c.alt_act) > 0 && reflect.DeepEqual(c.alt_act, cloud.Actions) {
+						t.Logf("cloud action matched alt_act")
+					} else {
+						t.Errorf("cloud action not matched in case [%s]\nexpected : %v\nbut got  : %v", name, c.actions, cloud.Actions)
+					}
 				}
 				if c.post_tsk != syncer.DoesHaveTask() {
 					t.Errorf("hasTask not matched in case [%s]\nexpected : %v\nbut got  : %v", name, c.post_tsk, syncer.DoesHaveTask())

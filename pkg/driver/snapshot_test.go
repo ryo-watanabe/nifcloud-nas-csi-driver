@@ -1,7 +1,6 @@
 package driver
 
 import (
-	//"fmt"
 	"flag"
 	"reflect"
 	"strings"
@@ -11,19 +10,8 @@ import (
 	"github.com/golang/protobuf/ptypes"
 	csi "github.com/container-storage-interface/spec/lib/go/csi"
 	"golang.org/x/net/context"
-	//"github.com/aws/aws-sdk-go-v2/aws/awserr"
-	//"github.com/nifcloud/nifcloud-sdk-go/service/nas"
 	"github.com/ryo-watanabe/nfcl-nas-csi-driver/pkg/util"
-	//corev1 "k8s.io/api/core/v1"
-	//batchv1 "k8s.io/api/batch/v1"
-	//metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	//"k8s.io/apimachinery/pkg/api/resource"
-	//"k8s.io/apimachinery/pkg/types"
-	//"k8s.io/apimachinery/pkg/util/rand"
-	//"k8s.io/client-go/kubernetes"
-	//k8sfake "k8s.io/client-go/kubernetes/fake"
-	//core "k8s.io/client-go/testing"
 	snapfake "github.com/kubernetes-csi/external-snapshotter/client/v3/clientset/versioned/fake"
 	snapv1 "github.com/kubernetes-csi/external-snapshotter/client/v3/apis/volumesnapshot/v1beta1"
 	corev1 "k8s.io/api/core/v1"
@@ -149,7 +137,7 @@ func TestCreateSnapshot(t *testing.T) {
 
 	for name, c := range(cases) {
 		t.Logf("====== Test case [%s] :", name)
-		ctl, _ := initTestController(t, c.obj, c.job_failed)
+		ctl, _, _ := initTestController(t, c.obj, c.job_failed)
 		// test the case
 		test_restic_pod_log = c.pod_logs
 		res, err := ctl.CreateSnapshot(context.TODO(), c.req)
@@ -215,7 +203,7 @@ func TestDeleteSnapshot(t *testing.T) {
 
 	for name, c := range(cases) {
 		t.Logf("====== Test case [%s] :", name)
-		ctl, _ := initTestController(t, c.obj, c.job_failed)
+		ctl, _, _ := initTestController(t, c.obj, c.job_failed)
 		// test the case
 		test_restic_pod_log = c.pod_logs
 		_, err := ctl.DeleteSnapshot(context.TODO(), c.req)
@@ -341,7 +329,7 @@ func TestListSnapshot(t *testing.T) {
 
 	for name, c := range(cases) {
 		t.Logf("====== Test case [%s] :", name)
-		ctl, _ := initTestController(t, c.obj, c.job_failed)
+		ctl, _, _ := initTestController(t, c.obj, c.job_failed)
 		// test the case
 		test_restic_pod_log = c.pod_logs
 		res, err := ctl.ListSnapshots(context.TODO(), c.req)

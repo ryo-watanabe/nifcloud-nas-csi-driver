@@ -24,11 +24,6 @@ import (
 	core "k8s.io/client-go/testing"
 )
 
-const (
-	volumeSize = 100 * util.Gb
-	volumeQnty = "100Gi"
-)
-
 func TestCreateVolume(t *testing.T) {
 
 	rand.Seed(1)
@@ -36,18 +31,22 @@ func TestCreateVolume(t *testing.T) {
 
 	cases := map[string]struct {
 		obj []runtime.Object
-		pre []*csi.CreateVolumeRequest
+		pre []nas.NASInstance
 		req *csi.CreateVolumeRequest
 		res *csi.CreateVolumeResponse
+		post []nas.NASInstance
 		job_failed bool
+		err_on_create bool
+		err_after_wait bool
 		errmsg string
 	}{
-		"valid volume":{
+		"valid volume 100Gi for request 10Gi":{
 			obj: []runtime.Object{
 				newPVC("testpvc", "10Gi", "TESTPVCUID"),
 			},
 			req: initCreateVolumeResquest("pvc-TESTPVCUID", 10 * util.Gb, 0, "192.168.100.0/28", false),
 			res: initCreateVolumeResponse("testregion/pvc-TESTPVCUID", 100 * util.Gb, "192.168.100.0", ""),
+			post: []nas.NASInstance{initNASInstance("pvc-TESTPVCUID", "192.168.100.0", 100)},
 		},
 		"volume with no name":{
 			req: initCreateVolumeResquest("", 0, 0, "0.0.0.0/32", false),
@@ -57,41 +56,95 @@ func TestCreateVolume(t *testing.T) {
 			req: initCreateVolumeResquest("pvc-TESTPVCUID", 0, 0, "0.0.0.0/32", false),
 			errmsg: "driver does not support access mode",
 		},
+		"invalid parameter":{
+			req: initCreateVolumeResquest("pvc-TESTPVCUID", 0, 0, "0.0.0.0/32", false),
+			errmsg: "invalid parameter \"unknownparam\"",
+		},
+		"invalid shared capacity value":{
+			req: initCreateVolumeResquest("pvc-TESTPVCUID", 0, 0, "0.0.0.0/32", true),
+			errmsg: "Invalid value in capacityParInstanceGiB: strconv.ParseInt: parsing \"500Gi\": invalid syntax",
+		},
+		"too big to share":{
+			req: initCreateVolumeResquest("pvc-TESTPVCUID", 1000 * util.Gb, 0, "0.0.0.0/32", true),
+			errmsg: "Request capacity 1073741824000 is too big to share a NAS instance",
+		},
+		"volume id without uid":{
+			req: initCreateVolumeResquest("somePVCName", 0, 0, "0.0.0.0/32", false),
+			errmsg: "getting IP from PVC : Cannot split UID",
+		},
+		"pvc not found":{
+			req: initCreateVolumeResquest("pvc-TESTPVCUID", 0, 0, "0.0.0.0/32", false),
+			errmsg: "PVC TESTPVCUID not found",
+		},
+		"ip not provided":{
+			obj: []runtime.Object{
+				newPVC("testpvc", "10Gi", "TESTPVCUID"),
+			},
+			req: initCreateVolumeResquest("pvc-TESTPVCUID", 0, 0, "", false),
+			errmsg: "reservedIpv4Cidr must be provided",
+		},
+		"error on create":{
+			obj: []runtime.Object{
+				newPVC("testpvc", "10Gi", "TESTPVCUID"),
+			},
+			req: initCreateVolumeResquest("pvc-TESTPVCUID", 10 * util.Gb, 0, "10.100.0.0/28", false),
+			err_on_create: true,
+			errmsg: "NAS Instance pvc-TESTPVCUID status:unknown",
+		},
+		"error after wait":{
+			obj: []runtime.Object{
+				newPVC("testpvc", "10Gi", "TESTPVCUID"),
+			},
+			req: initCreateVolumeResquest("pvc-TESTPVCUID", 10 * util.Gb, 0, "10.100.0.0/28", false),
+			err_after_wait: true,
+			errmsg: "waiting for NASInstance creating > available: NASInstance pvc-TESTPVCUID status: unknown",
+		},
+		"ip from pvc annotation":{
+			obj: []runtime.Object{
+				newPVC("testpvc", "10Gi", "TESTPVCUID"),
+			},
+			req: initCreateVolumeResquest("pvc-TESTPVCUID", 10 * util.Gb, 0, "10.100.0.0/28", false),
+			res: initCreateVolumeResponse("testregion/pvc-TESTPVCUID", 100 * util.Gb, "192.168.100.0", ""),
+			post: []nas.NASInstance{initNASInstance("pvc-TESTPVCUID", "192.168.100.0", 100)},
+		},
 		"take neighbor ip":{
 			obj: []runtime.Object{
-				newPVC("testpvc", volumeQnty, "TESTPVCUID"),
-				newPVC("testpvc-pre", volumeQnty, "TESTPVCUID-pre"),
+				newPVC("testpvc", "100Gi", "TESTPVCUID"),
+				newPVC("testpvc-pre", "100Gi", "TESTPVCUID-pre"),
 			},
-			pre: []*csi.CreateVolumeRequest{
-				initCreateVolumeResquest("pvc-TESTPVCUID-pre", volumeSize, 0, "192.168.100.0/28", false),
+			pre: []nas.NASInstance{initNASInstance("pvc-TESTPVCUID-pre", "192.168.100.0", 100)},
+			req: initCreateVolumeResquest("pvc-TESTPVCUID", 100 * util.Gb, 0, "192.168.100.0/28", false),
+			res: initCreateVolumeResponse("testregion/pvc-TESTPVCUID", 100 * util.Gb, "192.168.100.1", ""),
+			post: []nas.NASInstance{
+				initNASInstance("pvc-TESTPVCUID-pre", "192.168.100.0", 100),
+				initNASInstance("pvc-TESTPVCUID", "192.168.100.1", 100),
 			},
-			req: initCreateVolumeResquest("pvc-TESTPVCUID", volumeSize, 0, "192.168.100.0/28", false),
-			res: initCreateVolumeResponse("testregion/pvc-TESTPVCUID", volumeSize, "192.168.100.1", ""),
 		},
 		"valid shared volume":{
 			obj: []runtime.Object{
-				newPVC("testpvc", volumeQnty, "TESTPVCUID"),
+				newPVC("testpvc", "100Gi", "TESTPVCUID"),
 			},
-			req: initCreateVolumeResquest("pvc-TESTPVCUID", volumeSize, 0, "192.168.100.0/28", true),
-			res: initCreateVolumeResponse("testregion/cluster-TESTCLUSTERUID-shd001-" + sharedSuffix + "/pvc-TESTPVCUID", volumeSize, "192.168.100.0", "pvc-TESTPVCUID"),
+			req: initCreateVolumeResquest("pvc-TESTPVCUID", 100 * util.Gb, 0, "192.168.100.0/28", true),
+			res: initCreateVolumeResponse("testregion/cluster-TESTCLUSTERUID-shd001-" + sharedSuffix + "/pvc-TESTPVCUID", 100 * util.Gb, "192.168.100.0", "pvc-TESTPVCUID"),
+			post: []nas.NASInstance{initNASInstance("cluster-TESTCLUSTERUID-shd001-" + sharedSuffix, "192.168.100.0", 500)},
 		},
 		"room shared volume":{
 			obj: []runtime.Object{
-				newPVC("testpvc-pre", volumeQnty, "TESTPVCUID-pre"),
+				newPVC("testpvc-pre", "100Gi", "TESTPVCUID-pre"),
+				newPV("pvc-TESTPVCUID-pre", "testregion/cluster-TESTCLUSTERUID-shd001-" + sharedSuffix + "/pvc-TESTPVCUID-pre", "100Gi"),
 				newPVC("testpvc", "10Gi", "TESTPVCUID"),
 			},
-			pre: []*csi.CreateVolumeRequest{
-				initCreateVolumeResquest("pvc-TESTPVCUID-pre", volumeSize, 0, "192.168.100.0/28", true),
-			},
+			pre: []nas.NASInstance{initNASInstance("cluster-TESTCLUSTERUID-shd001-" + sharedSuffix, "192.168.100.0", 500)},
 			req: initCreateVolumeResquest("pvc-TESTPVCUID", 10 * util.Gb, 0, "192.168.100.0/28", true),
 			res: initCreateVolumeResponse("testregion/cluster-TESTCLUSTERUID-shd001-" + sharedSuffix + "/pvc-TESTPVCUID", 10 * util.Gb, "192.168.100.0", "pvc-TESTPVCUID"),
+			post: []nas.NASInstance{initNASInstance("cluster-TESTCLUSTERUID-shd001-" + sharedSuffix, "192.168.100.0", 500)},
 		},
 		"making source path job failed":{
 			obj: []runtime.Object{
-				newPVC("testpvc", volumeQnty, "TESTPVCUID"),
+				newPVC("testpvc", "100Gi", "TESTPVCUID"),
 				newPod("jobpod", "default", "cluster-TESTCLUSTERUID-shd001-" + sharedSuffix),
 			},
-			req: initCreateVolumeResquest("pvc-TESTPVCUID", volumeSize, 0, "192.168.100.0/28", true),
+			req: initCreateVolumeResquest("pvc-TESTPVCUID", 100 * util.Gb, 0, "192.168.100.0/28", true),
 			job_failed: true,
 			errmsg: "error making source path for shared NASInstance:fake logs",
 		},
@@ -101,6 +154,11 @@ func TestCreateVolume(t *testing.T) {
 	cases["unsupported access mode"].req.VolumeCapabilities[0].AccessMode = &csi.VolumeCapability_AccessMode{
 		Mode: csi.VolumeCapability_AccessMode_UNKNOWN,
 	}
+	cases["invalid parameter"].req.Parameters["unknownparam"] = "unknownparamvalue"
+	cases["ip from pvc annotation"].obj[0].(*corev1.PersistentVolumeClaim).ObjectMeta.Annotations = map[string]string{
+		"testDriverName/reservedIPv4Cidr": "192.168.100.0",
+	}
+	cases["invalid shared capacity value"].req.Parameters["capacityParInstanceGiB"] = "500Gi"
 
 	flag.Set("logtostderr", "true")
 	flag.Lookup("v").Value.Set("4")
@@ -108,27 +166,26 @@ func TestCreateVolume(t *testing.T) {
 
 	for name, c := range(cases) {
 		t.Logf("====== Test case [%s] :", name)
-		ctl, kubeClient := initTestController(t, c.obj, c.job_failed)
-		// pre existing volumes
-		failed := false
-		for _, v := range(c.pre) {
-			err := createVolumeAndPV(ctl, v, kubeClient)
-			if err != nil {
-				t.Errorf("cannot create pre existing volume in case [%s] : %s", name, err.Error())
-				failed = true
-				break
-			}
+		ctl, _, cloud := initTestController(t, c.obj, c.job_failed)
+		cloud.NasInstances = c.pre
+		if c.err_on_create {
+			cloud.StatusOnCreate = &statusUnknown
 		}
-		if failed {
-			continue
+		if c.err_after_wait {
+			cloud.StatusAfterWait = &statusUnknown
 		}
 		// test the case
 		res, err := ctl.CreateVolume(context.TODO(), c.req)
 		if c.errmsg == "" {
 			if err != nil {
 				t.Errorf("unexpected error in case [%s] : %s", name, err.Error())
-			} else if !reflect.DeepEqual(res, c.res) {
-				t.Errorf("result not matched in case [%s]\nexpected : %v\nbut got  : %v", name, c.res, res)
+			} else {
+				if !reflect.DeepEqual(res, c.res) {
+					t.Errorf("response not matched in case [%s]\nexpected : %v\nbut got  : %v", name, c.res, res)
+				}
+				if !reflect.DeepEqual(cloud.NasInstances, c.post) {
+					t.Errorf("instance not matched in case [%s]\nexpected : %v\nbut got  : %v", name, c.post, cloud.NasInstances)
+				}
 			}
 		} else {
 			if err == nil {
@@ -147,27 +204,32 @@ func TestDeleteVolume(t *testing.T) {
 
 	cases := map[string]struct {
 		obj []runtime.Object
-		pre []*csi.CreateVolumeRequest
+		pre []nas.NASInstance
 		req *csi.DeleteVolumeRequest
+		post []nas.NASInstance
 		errmsg string
 	}{
 		"delete volume":{
-			obj: []runtime.Object{
-				newPVC("testpvc", volumeQnty, "TESTPVCUID"),
-			},
-			pre: []*csi.CreateVolumeRequest{
-				initCreateVolumeResquest("pvc-TESTPVCUID", volumeSize, 0, "192.168.100.0/28", false),
-			},
+			pre: []nas.NASInstance{initNASInstance("pvc-TESTPVCUID", "192.168.100.0", 100)},
 			req: &csi.DeleteVolumeRequest{VolumeId: "testregion/pvc-TESTPVCUID"},
+			post: []nas.NASInstance{},
 		},
 		"delete shared volume":{
 			obj: []runtime.Object{
-				newPVC("testpvc", volumeQnty, "TESTPVCUID"),
+				newPV("pvc-TESTPVCUID", "testregion/cluster-TESTCLUSTERUID-shd001-" + sharedSuffix + "/pvc-TESTPVCUID", "100Gi"),
+				newPV("pvc-TESTPVCUID2", "testregion/cluster-TESTCLUSTERUID-shd001-" + sharedSuffix + "/pvc-TESTPVCUID2", "100Gi"),
 			},
-			pre: []*csi.CreateVolumeRequest{
-				initCreateVolumeResquest("pvc-TESTPVCUID", volumeSize, 0, "192.168.100.0/28", true),
-			},
+			pre: []nas.NASInstance{initNASInstance("cluster-TESTCLUSTERUID-shd001-" + sharedSuffix, "192.168.100.0", 500)},
 			req: &csi.DeleteVolumeRequest{VolumeId: "testregion/cluster-TESTCLUSTERUID-shd001-" + sharedSuffix + "/pvc-TESTPVCUID"},
+			post: []nas.NASInstance{initNASInstance("cluster-TESTCLUSTERUID-shd001-" + sharedSuffix, "192.168.100.0", 500)},
+		},
+		"delete shared nas":{
+			obj: []runtime.Object{
+				newPV("pvc-TESTPVCUID", "testregion/cluster-TESTCLUSTERUID-shd001-" + sharedSuffix + "/pvc-TESTPVCUID", "100Gi"),
+			},
+			pre: []nas.NASInstance{initNASInstance("cluster-TESTCLUSTERUID-shd001-" + sharedSuffix, "192.168.100.0", 500)},
+			req: &csi.DeleteVolumeRequest{VolumeId: "testregion/cluster-TESTCLUSTERUID-shd001-" + sharedSuffix + "/pvc-TESTPVCUID"},
+			post: []nas.NASInstance{},
 		},
 	}
 
@@ -177,25 +239,15 @@ func TestDeleteVolume(t *testing.T) {
 
 	for name, c := range(cases) {
 		t.Logf("====== Test case [%s] :", name)
-		ctl, kubeClient := initTestController(t, c.obj, false)
-		// pre existing volumes
-		failed := false
-		for _, v := range(c.pre) {
-			err := createVolumeAndPV(ctl, v, kubeClient)
-			if err != nil {
-				t.Errorf("cannot create pre-existing volume in case [%s] : %s", name, err.Error())
-				failed = true
-				break
-			}
-		}
-		if failed {
-			continue
-		}
+		ctl, _, cloud := initTestController(t, c.obj, false)
+		cloud.NasInstances = c.pre
 		// test the case
 		_, err := ctl.DeleteVolume(context.TODO(), c.req)
 		if c.errmsg == "" {
 			if err != nil {
 				t.Errorf("unexpected error in case [%s] : %s", name, err.Error())
+			} else if !reflect.DeepEqual(cloud.NasInstances, c.post) {
+				t.Errorf("instance not matched in case [%s]\nexpected : %v\nbut got  : %v", name, c.post, cloud.NasInstances)
 			}
 		} else {
 			if err == nil {
@@ -211,17 +263,12 @@ func TestValidateVolumeCapabilities(t *testing.T) {
 
 	cases := map[string]struct {
 		obj []runtime.Object
-		pre []*csi.CreateVolumeRequest
+		pre []nas.NASInstance
 		req *csi.ValidateVolumeCapabilitiesRequest
 		errmsg string
 	}{
 		"valid volume":{
-			obj: []runtime.Object{
-				newPVC("testpvc", volumeQnty, "TESTPVCUID"),
-			},
-			pre: []*csi.CreateVolumeRequest{
-				initCreateVolumeResquest("pvc-TESTPVCUID", volumeSize, 0, "192.168.100.0/28", false),
-			},
+			pre: []nas.NASInstance{initNASInstance("pvc-TESTPVCUID", "192.168.100.0", 100)},
 			req: &csi.ValidateVolumeCapabilitiesRequest{VolumeId: "testregion/pvc-TESTPVCUID", VolumeCapabilities: initVolumeCapabilities()},
 		},
 		"volume not found":{
@@ -229,12 +276,7 @@ func TestValidateVolumeCapabilities(t *testing.T) {
 			errmsg: "NotFound",
 		},
 		"unsupported access mode":{
-			obj: []runtime.Object{
-				newPVC("testpvc", volumeQnty, "TESTPVCUID"),
-			},
-			pre: []*csi.CreateVolumeRequest{
-				initCreateVolumeResquest("pvc-TESTPVCUID", volumeSize, 0, "192.168.100.0/28", false),
-			},
+			pre: []nas.NASInstance{initNASInstance("pvc-TESTPVCUID", "192.168.100.0", 100)},
 			req: &csi.ValidateVolumeCapabilitiesRequest{VolumeId: "testregion/pvc-TESTPVCUID", VolumeCapabilities: initVolumeCapabilities()},
 			errmsg: "driver does not support access mode",
 		},
@@ -251,20 +293,8 @@ func TestValidateVolumeCapabilities(t *testing.T) {
 
 	for name, c := range(cases) {
 		t.Logf("====== Test case [%s] :", name)
-		ctl, kubeClient := initTestController(t, c.obj, false)
-		// pre existing volumes
-		failed := false
-		for _, v := range(c.pre) {
-			err := createVolumeAndPV(ctl, v, kubeClient)
-			if err != nil {
-				t.Errorf("cannot create pre-existing volume in case [%s] : %s", name, err.Error())
-				failed = true
-				break
-			}
-		}
-		if failed {
-			continue
-		}
+		ctl, _, cloud := initTestController(t, c.obj, false)
+		cloud.NasInstances = c.pre
 		// test the case
 		_, err := ctl.ValidateVolumeCapabilities(context.TODO(), c.req)
 		if c.errmsg == "" {
@@ -283,12 +313,37 @@ func TestValidateVolumeCapabilities(t *testing.T) {
 
 // test utils
 
+func initNASInstance(name, ip string, storage int64) nas.NASInstance {
+	var preZone = "east-11"
+	var preNetwork = "default"
+	var preProtocol = "nfs"
+	var preInstanceType int64 = 0
+	preStorage := fmt.Sprintf("%d", storage)
+	return nas.NASInstance{
+		AllocatedStorage: &preStorage,
+		AvailabilityZone: &preZone,
+		NASInstanceIdentifier: &name,
+		NASInstanceType: &preInstanceType,
+		NASSecurityGroups: []nas.NASSecurityGroup{
+			nas.NASSecurityGroup{NASSecurityGroupName: &testSecurityGroupName},
+		},
+		Endpoint: &nas.Endpoint{PrivateAddress: &ip},
+		NetworkId: &preNetwork,
+		Protocol: &preProtocol,
+		NASInstanceStatus: &statusAvailable,
+		NoRootSquash: &valueTrue,
+	}
+}
+
 func initCreateVolumeResquest(name string, capReq, capLim int64, cidr string, shared bool) *csi.CreateVolumeRequest {
 	req := &csi.CreateVolumeRequest{
 		Name: name,
 		VolumeCapabilities: initVolumeCapabilities(),
 		CapacityRange: &csi.CapacityRange{RequiredBytes: capReq, LimitBytes: capLim},
-		Parameters: map[string]string{"reservedIpv4Cidr": cidr},
+		Parameters: map[string]string{},
+	}
+	if cidr != "" {
+		req.Parameters["reservedIpv4Cidr"] = cidr
 	}
 	if shared {
 		req.Parameters["shared"] = "true"
@@ -330,7 +385,7 @@ func createVolumeAndPV(ctl csi.ControllerServer, req *csi.CreateVolumeRequest, k
 	}
 	_, err = kubeClient.CoreV1().PersistentVolumes().Create(
 		context.TODO(),
-		newPV(req.Name, res.Volume.VolumeId, volumeQnty),
+		newPV(req.Name, res.Volume.VolumeId, "100Gi"),
 		metav1.CreateOptions{},
 	)
 	if err != nil {
@@ -339,7 +394,11 @@ func createVolumeAndPV(ctl csi.ControllerServer, req *csi.CreateVolumeRequest, k
 	return nil
 }
 
-func initTestController(t *testing.T, objects []runtime.Object, job_failed bool) (csi.ControllerServer, kubernetes.Interface) {
+func initTestController(
+	t *testing.T,
+	objects []runtime.Object,
+	job_failed bool) (csi.ControllerServer, kubernetes.Interface, *FakeCloud) {
+
 	// test cloud
 	cloud := newFakeCloud()
 	// test k8s
@@ -364,7 +423,7 @@ func initTestController(t *testing.T, objects []runtime.Object, job_failed bool)
 	rand.Seed(1)
 
 	driver := initTestDriver(t, cloud, kubeClient, true, false)
-	return driver.cs, kubeClient
+	return driver.cs, kubeClient, cloud
 }
 
 func newPVC(name, requestStorage, uid string) *corev1.PersistentVolumeClaim {
@@ -431,12 +490,17 @@ type FakeCloud struct {
 	NasSecurityGroups []nas.NASSecurityGroup
 	Actions []string
 	waitCnt int
+	StatusOnCreate *string
+	StatusAfterWait *string
 }
 
 // Fake Cloud
 
 func newFakeCloud() *FakeCloud {
-	return &FakeCloud{}
+	return &FakeCloud{
+		StatusOnCreate: &statusCreating,
+		StatusAfterWait: &statusAvailable,
+	}
 }
 
 var (
@@ -446,6 +510,7 @@ var (
 	statusAuthorizing = "authorizing"
 	statusAuthorized = "authorized"
 	statusRevoking = "revoking"
+	statusUnknown = "unknown"
 	valueTrue = "true"
 	valueFalse = "false"
 )
@@ -456,7 +521,7 @@ func (c *FakeCloud) GetNasInstance(ctx context.Context, name string) (*nas.NASIn
 		if *n.NASInstanceIdentifier == name {
 			c.waitCnt--
 			if c.waitCnt <= 0 {
-				c.NasInstances[i].NASInstanceStatus = &statusAvailable
+				c.NasInstances[i].NASInstanceStatus = c.StatusAfterWait
 				c.waitCnt = 0
 			}
 			return &c.NasInstances[i], nil
@@ -486,7 +551,7 @@ func (c *FakeCloud) CreateNasInstance(ctx context.Context, in *nas.CreateNASInst
 		Endpoint: &nas.Endpoint{PrivateAddress: &ip},
 		NetworkId: in.NetworkId,
 		Protocol: in.Protocol,
-		NASInstanceStatus: &statusCreating,
+		NASInstanceStatus: c.StatusOnCreate,
 		NoRootSquash: &valueFalse,
 	}
 	c.NasInstances = append(c.NasInstances, n)
@@ -509,7 +574,16 @@ func (c *FakeCloud) ModifyNasInstance(ctx context.Context, name string) (*nas.NA
 
 func (c *FakeCloud) DeleteNasInstance(ctx context.Context, name string) error {
 	c.Actions = append(c.Actions, "DeleteNasInstance/" + name)
-	return nil
+	for i, n := range(c.NasInstances) {
+		if *n.NASInstanceIdentifier == name {
+			if len(c.NasInstances) > 1 {
+				c.NasInstances[i] = c.NasInstances[len(c.NasInstances)-1]
+			}
+			c.NasInstances = c.NasInstances[:len(c.NasInstances)-1]
+			return nil
+		}
+	}
+	return awserr.New("TestAwsErrorNotFound", "", fmt.Errorf("NASInstance %s not found", name))
 }
 
 func (c *FakeCloud) GenerateVolumeIdFromNasInstance(obj *nas.NASInstance) string {
