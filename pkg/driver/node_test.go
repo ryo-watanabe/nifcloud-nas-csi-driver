@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	csi "github.com/container-storage-interface/spec/lib/go/csi"
 	"golang.org/x/net/context"
@@ -424,19 +425,21 @@ func TestRegisterNodePrivateIP(t *testing.T) {
 		RunNode:       true,
 		KubeClient:    kubeClient,
 		PrivateIfName: "lo",
+		InitBackoff:   1,
 	}
 
-	err := registerNodePrivateIp(config)
+	driver, _ := NewNifcloudNasDriver(config)
+	go func(){
+		driver.Run("unix:/tmp/csi.sock")
+	}()
+	time.Sleep(time.Duration(2) * time.Second)
+	driver.Stop()
+	csinode, err := kubeClient.StorageV1().CSINodes().Get(context.TODO(), "testNodeID", metav1.GetOptions{})
 	if err != nil {
-		t.Errorf("Error in registering node private IP : %s", err.Error())
-	} else {
-		csinode, err := config.KubeClient.StorageV1().CSINodes().Get(context.TODO(), "testNodeID", metav1.GetOptions{})
-		if err != nil {
-			t.Errorf("Error obtaining result CSINode : %s", err.Error())
-		}
-		if csinode.GetAnnotations()[config.Name+"/privateIp"] != "127.0.0.1" {
-			t.Errorf("Node IP not matched : %s", csinode.GetAnnotations()[config.Name+"/privateIp"])
-		}
+		t.Errorf("Error obtaining result CSINode : %s", err.Error())
+	}
+	if csinode.GetAnnotations()[config.Name+"/privateIp"] != "127.0.0.1" {
+		t.Errorf("Node IP not matched : %s", csinode.GetAnnotations()[config.Name+"/privateIp"])
 	}
 }
 

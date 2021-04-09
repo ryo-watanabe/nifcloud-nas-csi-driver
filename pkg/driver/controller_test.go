@@ -5,7 +5,9 @@ import (
 	"flag"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	csi "github.com/container-storage-interface/spec/lib/go/csi"
 	"golang.org/x/net/context"
@@ -52,15 +54,15 @@ func TestCreateVolume(t *testing.T) {
 			req: initCreateVolumeResquest("", 0, 0, "0.0.0.0/32", false),
 			errmsg: "CreateVolume name must be provided",
 		},
-		"unsupported access mode":{
+		"unsupported access mode":{ // with additional params below
 			req: initCreateVolumeResquest("pvc-TESTPVCUID", 0, 0, "0.0.0.0/32", false),
 			errmsg: "driver does not support access mode",
 		},
-		"invalid parameter":{
+		"invalid parameter":{ // with additional params below
 			req: initCreateVolumeResquest("pvc-TESTPVCUID", 0, 0, "0.0.0.0/32", false),
 			errmsg: "invalid parameter \"unknownparam\"",
 		},
-		"invalid shared capacity value":{
+		"invalid shared capacity value":{ // with additional params below
 			req: initCreateVolumeResquest("pvc-TESTPVCUID", 0, 0, "0.0.0.0/32", true),
 			errmsg: "Invalid value in capacityParInstanceGiB: strconv.ParseInt: parsing \"500Gi\": invalid syntax",
 		},
@@ -99,7 +101,7 @@ func TestCreateVolume(t *testing.T) {
 			err_after_wait: true,
 			errmsg: "waiting for NASInstance creating > available: NASInstance pvc-TESTPVCUID status: unknown",
 		},
-		"ip from pvc annotation":{
+		"ip from pvc annotation":{ // with additional params below
 			obj: []runtime.Object{
 				newPVC("testpvc", "10Gi", "TESTPVCUID"),
 			},
@@ -197,6 +199,158 @@ func TestCreateVolume(t *testing.T) {
 	}
 }
 
+func TestCreateMultiVolumes(t *testing.T) {
+
+	rand.Seed(1)
+	sharedSuffix := rand.String(5)
+
+	cases := map[string]struct {
+		obj []runtime.Object
+		pre []nas.NASInstance
+		req []*csi.CreateVolumeRequest
+		res []*csi.CreateVolumeResponse
+		post []nas.NASInstance
+		job_failed bool
+		errmsg []string
+		intvl int
+	}{
+		"create 3 volumes parallelly":{
+			obj: []runtime.Object{
+				newPVC("testpvc1", "10Gi", "TESTPVCUID1"),
+				newPVC("testpvc2", "10Gi", "TESTPVCUID2"),
+				newPVC("testpvc3", "10Gi", "TESTPVCUID3"),
+			},
+			req: []*csi.CreateVolumeRequest{
+				initCreateVolumeResquest("pvc-TESTPVCUID1", 10 * util.Gb, 0, "192.168.100.0/28", false),
+				initCreateVolumeResquest("pvc-TESTPVCUID2", 10 * util.Gb, 0, "192.168.100.0/28", false),
+				initCreateVolumeResquest("pvc-TESTPVCUID3", 10 * util.Gb, 0, "192.168.100.0/28", false),
+			},
+			res: []*csi.CreateVolumeResponse{
+				initCreateVolumeResponse("testregion/pvc-TESTPVCUID1", 100 * util.Gb, "192.168.100.0", ""),
+				initCreateVolumeResponse("testregion/pvc-TESTPVCUID2", 100 * util.Gb, "192.168.100.1", ""),
+				initCreateVolumeResponse("testregion/pvc-TESTPVCUID3", 100 * util.Gb, "192.168.100.2", ""),
+			},
+			post: []nas.NASInstance{
+				initNASInstance("pvc-TESTPVCUID1", "192.168.100.0", 100),
+				initNASInstance("pvc-TESTPVCUID2", "192.168.100.1", 100),
+				initNASInstance("pvc-TESTPVCUID3", "192.168.100.2", 100),
+			},
+			intvl: 10,
+		},
+		"create 3 shared volumes sequentially":{
+			obj: []runtime.Object{
+				newPVC("testpvc1", "10Gi", "TESTPVCUID1"),
+				newPVC("testpvc2", "10Gi", "TESTPVCUID2"),
+				newPVC("testpvc3", "10Gi", "TESTPVCUID3"),
+			},
+			req: []*csi.CreateVolumeRequest{
+				initCreateVolumeResquest("pvc-TESTPVCUID1", 10 * util.Gb, 0, "192.168.100.0/28", true),
+				initCreateVolumeResquest("pvc-TESTPVCUID2", 10 * util.Gb, 0, "192.168.100.0/28", true),
+				initCreateVolumeResquest("pvc-TESTPVCUID3", 10 * util.Gb, 0, "192.168.100.0/28", true),
+			},
+			res: []*csi.CreateVolumeResponse{
+				initCreateVolumeResponse("testregion/cluster-TESTCLUSTERUID-shd001-" + sharedSuffix + "/pvc-TESTPVCUID1", 10 * util.Gb, "192.168.100.0", "pvc-TESTPVCUID1"),
+				initCreateVolumeResponse("testregion/cluster-TESTCLUSTERUID-shd001-" + sharedSuffix + "/pvc-TESTPVCUID2", 10 * util.Gb, "192.168.100.0", "pvc-TESTPVCUID2"),
+				initCreateVolumeResponse("testregion/cluster-TESTCLUSTERUID-shd001-" + sharedSuffix + "/pvc-TESTPVCUID3", 10 * util.Gb, "192.168.100.0", "pvc-TESTPVCUID3"),
+			},
+			post: []nas.NASInstance{
+				initNASInstance("cluster-TESTCLUSTERUID-shd001-" + sharedSuffix, "192.168.100.0", 500),
+			},
+			intvl: 10,
+		},
+		"no enough room to share so create one":{
+			obj: []runtime.Object{
+				newPVC("testpvc1", "200Gi", "TESTPVCUID-pre"),
+				newPV("pvc-TESTPVCUID-pre", "testregion/cluster-TESTCLUSTERUID-shd001-" + sharedSuffix + "/pvc-TESTPVCUID-pre", "200Gi"),
+				newPVC("testpvc2", "200Gi", "TESTPVCUID1"),
+				newPVC("testpvc3", "200Gi", "TESTPVCUID2"),
+			},
+			pre: []nas.NASInstance{
+				initNASInstance("cluster-TESTCLUSTERUID-shd001-" + sharedSuffix, "192.168.100.0", 500),
+			},
+			req: []*csi.CreateVolumeRequest{
+				initCreateVolumeResquest("pvc-TESTPVCUID1", 200 * util.Gb, 0, "192.168.100.0/28", true),
+				initCreateVolumeResquest("pvc-TESTPVCUID2", 200 * util.Gb, 0, "192.168.100.0/28", true),
+			},
+			res: []*csi.CreateVolumeResponse{
+				initCreateVolumeResponse("testregion/cluster-TESTCLUSTERUID-shd001-" + sharedSuffix + "/pvc-TESTPVCUID1", 200 * util.Gb, "192.168.100.0", "pvc-TESTPVCUID1"),
+				initCreateVolumeResponse("testregion/cluster-TESTCLUSTERUID-shd002-" + sharedSuffix + "/pvc-TESTPVCUID2", 200 * util.Gb, "192.168.100.1", "pvc-TESTPVCUID2"),
+			},
+			post: []nas.NASInstance{
+				initNASInstance("cluster-TESTCLUSTERUID-shd001-" + sharedSuffix, "192.168.100.0", 500),
+				initNASInstance("cluster-TESTCLUSTERUID-shd002-" + sharedSuffix, "192.168.100.1", 500),
+			},
+			intvl: 10,
+		},
+		"forbid resquests with same name":{
+			obj: []runtime.Object{
+				newPVC("testpvc1", "10Gi", "TESTPVCUID1"),
+			},
+			req: []*csi.CreateVolumeRequest{
+				initCreateVolumeResquest("pvc-TESTPVCUID1", 10 * util.Gb, 0, "192.168.100.0/28", false),
+				initCreateVolumeResquest("pvc-TESTPVCUID1", 10 * util.Gb, 0, "192.168.100.0/28", false),
+			},
+			res: []*csi.CreateVolumeResponse{
+				initCreateVolumeResponse("testregion/pvc-TESTPVCUID1", 100 * util.Gb, "192.168.100.0", ""),
+				&csi.CreateVolumeResponse{},
+			},
+			errmsg: []string{
+				"",
+				"Instance pvc-TESTPVCUID1 is about to create in other Create request",
+			},
+			post: []nas.NASInstance{
+				initNASInstance("pvc-TESTPVCUID1", "192.168.100.0", 100),
+			},
+			intvl: 10,
+		},
+	}
+
+	flag.Set("logtostderr", "true")
+	flag.Lookup("v").Value.Set("4")
+	flag.Parse()
+
+	for name, c := range(cases) {
+		t.Logf("====== Test case [%s] :", name)
+		ctl, kubeClient, cloud := initTestController(t, c.obj, c.job_failed)
+		cloud.NasInstances = c.pre
+		// test the case
+		wg := &sync.WaitGroup{}
+		for i := 0; i < len(c.req); i++ {
+			t.Logf("Runing #%d gorutine", i)
+			wg.Add(1)
+			go func(i int) {
+				res, err := ctl.CreateVolume(context.TODO(), c.req[i])
+				if len(c.errmsg) == 0 || c.errmsg[i] == "" {
+					if err != nil {
+						t.Errorf("unexpected error in case [%s] : %s", name, err.Error())
+					} else {
+						if !reflect.DeepEqual(res, c.res[i]) {
+							t.Errorf("response not matched in case [%s]\nexpected : %v\nbut got  : %v", name, c.res[i], res)
+						}
+					}
+				} else {
+					if err == nil {
+						t.Errorf("expected error not occured in case [%s]\nexpected : %s", name, c.errmsg[i])
+					} else if !strings.Contains(err.Error(), c.errmsg[i]) {
+						t.Errorf("error message not matched in case [%s]\nmust contains : %s\nbut got : %s", name, c.errmsg[i], err.Error())
+					}
+				}
+				if err == nil {
+					createPV(c.req[i].Name, res, kubeClient)
+				}
+				wg.Done()
+			}(i)
+			if c.intvl > 0 {
+				time.Sleep(time.Duration(c.intvl) * time.Millisecond)
+			}
+		}
+		wg.Wait()
+		if len(c.post) != 0 && !reflect.DeepEqual(cloud.NasInstances, c.post) {
+			t.Errorf("instance not matched in case [%s]\nexpected : %v\nbut got  : %v", name, c.post, cloud.NasInstances)
+		}
+	}
+}
+
 func TestDeleteVolume(t *testing.T) {
 
 	rand.Seed(1)
@@ -231,6 +385,16 @@ func TestDeleteVolume(t *testing.T) {
 			req: &csi.DeleteVolumeRequest{VolumeId: "testregion/cluster-TESTCLUSTERUID-shd001-" + sharedSuffix + "/pvc-TESTPVCUID"},
 			post: []nas.NASInstance{},
 		},
+		"delete with no volume id":{
+			pre: []nas.NASInstance{initNASInstance("pvc-TESTPVCUID", "192.168.100.0", 100)},
+			req: &csi.DeleteVolumeRequest{},
+			errmsg: "volume id is empty",
+		},
+		"invalid volume id":{
+			pre: []nas.NASInstance{initNASInstance("pvc-TESTPVCUID", "192.168.100.0", 100)},
+			req: &csi.DeleteVolumeRequest{VolumeId: "someVolumeId"},
+			post: []nas.NASInstance{initNASInstance("pvc-TESTPVCUID", "192.168.100.0", 100)},
+		},
 	}
 
 	flag.Set("logtostderr", "true")
@@ -255,6 +419,75 @@ func TestDeleteVolume(t *testing.T) {
 			} else if !strings.Contains(err.Error(), c.errmsg) {
 				t.Errorf("error message not matched in case [%s]\nmust contains : %s\nbut got : %s", name, c.errmsg, err.Error())
 			}
+		}
+	}
+}
+
+func TestDeleteMultiVolumes(t *testing.T) {
+
+	rand.Seed(1)
+	sharedSuffix := rand.String(5)
+
+	cases := map[string]struct {
+		obj []runtime.Object
+		pre []nas.NASInstance
+		req []*csi.DeleteVolumeRequest
+		post []nas.NASInstance
+		errmsg []string
+	}{
+		"delete all volumes on shared nas":{
+			obj: []runtime.Object{
+				newPV("pvc-TESTPVCUID1", "testregion/cluster-TESTCLUSTERUID-shd001-" + sharedSuffix + "/pvc-TESTPVCUID1", "100Gi"),
+				newPV("pvc-TESTPVCUID2", "testregion/cluster-TESTCLUSTERUID-shd001-" + sharedSuffix + "/pvc-TESTPVCUID2", "100Gi"),
+				newPV("pvc-TESTPVCUID3", "testregion/cluster-TESTCLUSTERUID-shd001-" + sharedSuffix + "/pvc-TESTPVCUID3", "100Gi"),
+			},
+			pre: []nas.NASInstance{initNASInstance("cluster-TESTCLUSTERUID-shd001-" + sharedSuffix, "192.168.100.0", 500)},
+			req: []*csi.DeleteVolumeRequest{
+				&csi.DeleteVolumeRequest{VolumeId: "testregion/cluster-TESTCLUSTERUID-shd001-" + sharedSuffix + "/pvc-TESTPVCUID1"},
+				&csi.DeleteVolumeRequest{VolumeId: "testregion/cluster-TESTCLUSTERUID-shd001-" + sharedSuffix + "/pvc-TESTPVCUID2"},
+				&csi.DeleteVolumeRequest{VolumeId: "testregion/cluster-TESTCLUSTERUID-shd001-" + sharedSuffix + "/pvc-TESTPVCUID3"},
+			},
+			post: []nas.NASInstance{},
+		},
+	}
+
+	flag.Set("logtostderr", "true")
+	flag.Lookup("v").Value.Set("4")
+	flag.Parse()
+
+	for name, c := range(cases) {
+		t.Logf("====== Test case [%s] :", name)
+		ctl, kubeClient, cloud := initTestController(t, c.obj, false)
+		cloud.NasInstances = c.pre
+		wg := &sync.WaitGroup{}
+		for i := 0; i < len(c.req); i++ {
+			wg.Add(1)
+			go func(i int) {
+				// test the case
+				_, err := ctl.DeleteVolume(context.TODO(), c.req[i])
+				if len(c.errmsg) == 0 || c.errmsg[i] == "" {
+					if err != nil {
+						t.Errorf("unexpected error in case [%s] : %s", name, err.Error())
+					}
+				} else {
+					if err == nil {
+						t.Errorf("expected error not occured in case [%s]\nexpected : %s", name, c.errmsg[i])
+					} else if !strings.Contains(err.Error(), c.errmsg[i]) {
+						t.Errorf("error message not matched in case [%s]\nmust contains : %s\nbut got : %s", name, c.errmsg[i], err.Error())
+					}
+				}
+				if err == nil {
+					err = deletePV(c.req[i].VolumeId, kubeClient)
+					if err != nil {
+						t.Errorf("error in case [%s] : %s", name, err)
+					}
+				}
+				wg.Done()
+			}(i)
+		}
+		wg.Wait()
+		if len(c.post) != 0 && !reflect.DeepEqual(cloud.NasInstances, c.post) {
+			t.Errorf("instance not matched in case [%s]\nexpected : %v\nbut got  : %v", name, c.post, cloud.NasInstances)
 		}
 	}
 }
@@ -378,20 +611,22 @@ func initCreateVolumeResponse(volumeID string, cap int64, ip, sourcePath string)
 	}
 }
 
-func createVolumeAndPV(ctl csi.ControllerServer, req *csi.CreateVolumeRequest, kubeClient kubernetes.Interface) error {
-	res, err := ctl.CreateVolume(context.TODO(), req)
-	if err != nil {
-		return err
-	}
-	_, err = kubeClient.CoreV1().PersistentVolumes().Create(
+func createPV(name string, res *csi.CreateVolumeResponse, kubeClient kubernetes.Interface) error {
+	quantity := fmt.Sprintf("%dGi", util.RoundBytesToGb(res.Volume.CapacityBytes))
+	_, err := kubeClient.CoreV1().PersistentVolumes().Create(
 		context.TODO(),
-		newPV(req.Name, res.Volume.VolumeId, "100Gi"),
+		newPV(name, res.Volume.VolumeId, quantity),
 		metav1.CreateOptions{},
 	)
-	if err != nil {
-		return err
-	}
-	return nil
+	return err
+}
+
+func deletePV(volumeId string, kubeClient kubernetes.Interface) error {
+	tokens := strings.Split(volumeId, "/")
+	name := tokens[len(tokens)-1]
+	return kubeClient.CoreV1().PersistentVolumes().Delete(
+		context.TODO(), name, metav1.DeleteOptions{},
+	)
 }
 
 func initTestController(
