@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	csi "github.com/container-storage-interface/spec/lib/go/csi"
 	"golang.org/x/net/context"
@@ -424,32 +425,54 @@ func TestRegisterNodePrivateIP(t *testing.T) {
 		RunNode:       true,
 		KubeClient:    kubeClient,
 		PrivateIfName: "lo",
+		InitBackoff:   1,
 	}
 
-	err := registerNodePrivateIp(config)
+	driver, _ := NewNifcloudNasDriver(config)
+	go func(){
+		driver.Run("unix:/tmp/csi.sock")
+	}()
+	time.Sleep(time.Duration(2) * time.Second)
+	driver.Stop()
+	csinode, err := kubeClient.StorageV1().CSINodes().Get(context.TODO(), "testNodeID", metav1.GetOptions{})
 	if err != nil {
-		t.Errorf("Error in registering node private IP : %s", err.Error())
-	} else {
-		csinode, err := config.KubeClient.StorageV1().CSINodes().Get(context.TODO(), "testNodeID", metav1.GetOptions{})
-		if err != nil {
-			t.Errorf("Error obtaining result CSINode : %s", err.Error())
-		}
-		if csinode.GetAnnotations()[config.Name+"/privateIp"] != "127.0.0.1" {
-			t.Errorf("Node IP not matched : %s", csinode.GetAnnotations()[config.Name+"/privateIp"])
-		}
+		t.Errorf("Error obtaining result CSINode : %s", err.Error())
+	}
+	if csinode.GetAnnotations()[config.Name+"/privateIp"] != "127.0.0.1" {
+		t.Errorf("Node IP not matched : %s", csinode.GetAnnotations()[config.Name+"/privateIp"])
 	}
 }
 
-// TODO
-func TestNodeGetId(t *testing.T) {
-}
-
-// TODO
 func TestNodeGetInfo(t *testing.T) {
+	testEnv := initTestNodeServer(t)
+	resp, err := testEnv.ns.NodeGetInfo(context.TODO(), nil)
+	if err != nil {
+		t.Fatalf("NodeGetInfo failed: %v", err)
+	}
+	if resp == nil {
+		t.Fatalf("NodeGetInfo resp is nil")
+	}
+	if resp.NodeId != "testNodeID" {
+		t.Errorf("got node id %v", resp.NodeId)
+	}
+	if resp.MaxVolumesPerNode != 128 {
+		t.Errorf("got max volumes per node %v", resp.MaxVolumesPerNode)
+	}
 }
 
-// TODO
 func TestNodeGetCapabilities(t *testing.T) {
+	testEnv := initTestNodeServer(t)
+	resp, err := testEnv.ns.NodeGetCapabilities(context.TODO(), nil)
+	if err != nil {
+		t.Fatalf("NodeGetCapabilities failed: %v", err)
+	}
+	if resp == nil {
+		t.Fatalf("NodeGetCapabilities resp is nil")
+	}
+	if len(resp.Capabilities) != 1 ||
+		!reflect.DeepEqual(resp.Capabilities[0], NewNodeServiceCapability(csi.NodeServiceCapability_RPC_GET_VOLUME_STATS)) {
+		t.Errorf("got node capabilities %v", resp.Capabilities)
+	}
 }
 
 func validateMountPoint(t *testing.T, name string, fm *mount.FakeMounter, e *mount.MountPoint) {

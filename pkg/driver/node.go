@@ -193,14 +193,6 @@ func (s *nodeServer) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpub
 	return &csi.NodeUnpublishVolumeResponse{}, nil
 }
 
-/*
-func (s *nodeServer) NodeGetId(ctx context.Context, req *csi.NodeGetIdRequest) (*csi.NodeGetIdResponse, error) {
-	return &csi.NodeGetIdResponse{
-		NodeId: s.driver.config.NodeID,
-	}, nil
-}
-*/
-
 func (s *nodeServer) NodeGetInfo(ctx context.Context, req *csi.NodeGetInfoRequest) (*csi.NodeGetInfoResponse, error) {
 	return &csi.NodeGetInfoResponse{
 		NodeId:            s.driver.config.NodeID,
@@ -227,6 +219,7 @@ func validateVolumeAttributes(attr map[string]string) error {
 	return nil
 }
 
+/*
 func validateSmbNodePublishSecrets(secrets map[string]string) error {
 	if secrets[optionSmbUser] == "" {
 		return fmt.Errorf("secret %v not set", optionSmbUser)
@@ -237,6 +230,7 @@ func validateSmbNodePublishSecrets(secrets map[string]string) error {
 	}
 	return nil
 }
+*/
 
 // isDirMounted checks if the path is already a mount point
 func (s *nodeServer) isDirMounted(targetPath string) (bool, error) {

@@ -210,7 +210,7 @@ func getSecretsFromSnapshotId(ctx context.Context, snapshotId string, driver *Ni
 		}
 	}
 	if className == "" {
-		return m, fmt.Errorf("Error snapshotId %s not found in volumesnapshotcontents : %s", snapshotId, err.Error())
+		return m, fmt.Errorf("Error snapshotId %s not found in volumesnapshotcontents", snapshotId)
 	}
 	class, err := snapClient.SnapshotV1beta1().VolumeSnapshotClasses().Get(ctx, className, metav1.GetOptions{})
 	if err != nil {

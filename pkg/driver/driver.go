@@ -54,6 +54,7 @@ type NifcloudNasDriver struct {
 	ids csi.IdentityServer
 	ns  csi.NodeServer
 	cs  csi.ControllerServer
+	sv  NonBlockingGRPCServer
 
 	// Plugin capabilities
 	vcap  map[csi.VolumeCapability_AccessMode_Mode]*csi.VolumeCapability_AccessMode
@@ -212,8 +213,8 @@ func (driver *NifcloudNasDriver) Run(endpoint string) {
 	glog.Infof("Running driver: %v", driver.config.Name)
 
 	//Start the nonblocking GRPC
-	s := NewNonBlockingGRPCServer()
-	s.Start(endpoint, driver.ids, driver.cs, driver.ns)
+	driver.sv = NewNonBlockingGRPCServer()
+	driver.sv.Start(endpoint, driver.ids, driver.cs, driver.ns)
 
 	// Start NAS Security Group Sync
 	if driver.cs != nil {
@@ -228,6 +229,9 @@ func (driver *NifcloudNasDriver) Run(endpoint string) {
 		b.RandomizationFactor = 0.2
 		b.Multiplier = 1.0
 		b.InitialInterval = 10 * time.Second
+		if driver.config.InitBackoff != 0 {
+			b.InitialInterval = driver.config.InitBackoff * time.Second
+		}
 		registerNodePrivateIpFunc := func() error {
 			return registerNodePrivateIp(driver.config)
 		}
@@ -238,7 +242,13 @@ func (driver *NifcloudNasDriver) Run(endpoint string) {
 	}
 
 	// Block app : TODO : signal handlings necessary for gracefull stopping.
-	s.Wait()
+	driver.sv.Wait()
+}
+
+func (driver *NifcloudNasDriver) Stop() {
+	if driver.sv != nil {
+		driver.sv.Stop()
+	}
 }
 
 func NewVolumeCapabilityAccessMode(mode csi.VolumeCapability_AccessMode_Mode) *csi.VolumeCapability_AccessMode {
