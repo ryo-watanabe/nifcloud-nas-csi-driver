@@ -50,6 +50,14 @@ func TestCreateVolume(t *testing.T) {
 			res: initCreateVolumeResponse("testregion/pvc-TESTPVCUID", 100 * util.Gb, "192.168.100.0", ""),
 			post: []nas.NASInstance{initNASInstance("pvc-TESTPVCUID", "192.168.100.0", 100)},
 		},
+		"valid volume 100Gi for limit 200Gi":{
+			obj: []runtime.Object{
+				newPVC("testpvc", "10Gi", "TESTPVCUID"),
+			},
+			req: initCreateVolumeResquest("pvc-TESTPVCUID", 10 * util.Gb, 200 * util.Gb, "192.168.100.0/28", false),
+			res: initCreateVolumeResponse("testregion/pvc-TESTPVCUID", 100 * util.Gb, "192.168.100.0", ""),
+			post: []nas.NASInstance{initNASInstance("pvc-TESTPVCUID", "192.168.100.0", 100)},
+		},
 		"volume with no name":{
 			req: initCreateVolumeResquest("", 0, 0, "0.0.0.0/32", false),
 			errmsg: "CreateVolume name must be provided",
@@ -541,6 +549,23 @@ func TestValidateVolumeCapabilities(t *testing.T) {
 				t.Errorf("error message not matched in case [%s]\nmust contains : %s\nbut got : %s", name, c.errmsg, err.Error())
 			}
 		}
+	}
+}
+
+func TestControllerGetCapabilities(t *testing.T) {
+	ctl, _, _ := initTestController(t, nil, false)
+	resp, err := ctl.ControllerGetCapabilities(context.TODO(), nil)
+	if err != nil {
+		t.Fatalf("ControllerGetCapabilities failed: %v", err)
+	}
+	if resp == nil {
+		t.Fatalf("ControllerGetCapabilities resp is nil")
+	}
+	if len(resp.Capabilities) != 3 ||
+		!reflect.DeepEqual(resp.Capabilities[0], NewControllerServiceCapability(csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME)) ||
+		!reflect.DeepEqual(resp.Capabilities[1], NewControllerServiceCapability(csi.ControllerServiceCapability_RPC_CREATE_DELETE_SNAPSHOT)) ||
+		!reflect.DeepEqual(resp.Capabilities[2], NewControllerServiceCapability(csi.ControllerServiceCapability_RPC_LIST_SNAPSHOTS)) {
+		t.Errorf("got controller capabilities %v", resp.Capabilities)
 	}
 }
 
