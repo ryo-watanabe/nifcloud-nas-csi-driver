@@ -2,21 +2,21 @@ package cloud
 
 import (
 	"fmt"
-	"strings"
-	"strconv"
 	"os"
+	"strings"
 
 	"golang.org/x/net/context"
 
-        "github.com/nifcloud/nifcloud-sdk-go/nifcloud"
 	"github.com/aws/aws-sdk-go-v2/aws/awserr"
-        "github.com/nifcloud/nifcloud-sdk-go/service/computing"
-        "github.com/nifcloud/nifcloud-sdk-go/service/nas"
-
-	"github.com/ryo-watanabe/nfcl-nas-csi-driver/pkg/util"
+	"github.com/nifcloud/nifcloud-sdk-go/nifcloud"
+	"github.com/nifcloud/nifcloud-sdk-go/service/computing"
+	"github.com/nifcloud/nifcloud-sdk-go/service/nas"
+	"github.com/nifcloud/nifcloud-sdk-go/service/hatoba"
+	"github.com/nifcloud/nifcloud-sdk-go/service/rdb"
 )
 
 type Interface interface {
+	// nas
 	GetNasInstance(ctx context.Context, name string) (*nas.NASInstance, error)
 	ListNasInstances(ctx context.Context) ([]nas.NASInstance, error)
 	CreateNasInstance(ctx context.Context, n *nas.CreateNASInstanceInput) (*nas.NASInstance, error)
@@ -28,18 +28,24 @@ type Interface interface {
 	CreateNasSecurityGroup(ctx context.Context, sc *nas.CreateNASSecurityGroupInput) (*nas.NASSecurityGroup, error)
 	AuthorizeCIDRIP(ctx context.Context, name, cidrip string) (*nas.NASSecurityGroup, error)
 	RevokeCIDRIP(ctx context.Context, name, cidrip string) (*nas.NASSecurityGroup, error)
+	// hatoba
+	ListClusters(ctx context.Context) ([]hatoba.Cluster, error)
+	// computing
+	ListInstances(ctx context.Context) ([]computing.InstancesSet, error)
+	GetPrivateLan(ctx context.Context, networkId string) (*computing.PrivateLanSet, error)
+	GetDhcpStatus(ctx context.Context, networkId, routerId string) ([]computing.IpAddressPoolSet, []computing.DhcpIpAddressSet, error)
+	// rdb
+	ListRdbInstances(ctx context.Context) ([]rdb.DBInstance, error)
 }
 
 type Cloud struct {
-        //Session *session.Session
-	Nas *nas.Client
+	//Session *session.Session
+	Nas       *nas.Client
 	Computing *computing.Client
-	Region string
+	Hatoba    *hatoba.Client
+	Rdb       *rdb.Client
+	Region    string
 }
-
-//type NasInstance struct {
-//	nas.NASInstance
-//}
 
 func NewCloud(region string) (*Cloud, error) {
 
@@ -54,76 +60,15 @@ func NewCloud(region string) (*Cloud, error) {
 	}
 
 	// Create config with credentials and region.
-        cfg := nifcloud.NewConfig(accesskey, secretkey, region)
+	cfg := nifcloud.NewConfig(accesskey, secretkey, region)
 
 	return &Cloud{
-                //Session: sess,
-		Nas: nas.New(cfg),
+		//Session: sess,
+		Nas:       nas.New(cfg),
 		Computing: computing.New(cfg),
-		Region: region,
-	}, nil
-}
-
-// NAS capacity string
-func getAllocatedStorage(capBytes int64, instanceType int64) *int64 {
-
-	var allocatedStorage int64
-	allocatedStorage = 100
-	if instanceType == 1 {
-		allocatedStorage = 1000
-	}
-
-	for i := 1; i < 10; i++ {
-		if instanceType == 1 {
-			allocatedStorage = int64(i)*1000
-		} else {
-			allocatedStorage = int64(i)*100
-		}
-		if util.GbToBytes(allocatedStorage) >= capBytes {
-			break
-		}
-	}
-
-	return &allocatedStorage
-}
-
-// CreateVolume parameters
-func GenerateNasInstanceInput(name string, capBytes int64, params map[string]string) (*nas.CreateNASInstanceInput, error) {
-	// Set default parameters
-	var instanceType int64
-	instanceType = 0
-	zone := "east-11"
-	network := "default"
-	protocol := "nfs"
-	var err error
-
-	// Validate parameters (case-insensitive).
-	for k, v := range params {
-		switch strings.ToLower(k) {
-		case "instancetype":
-			instanceType, err = strconv.ParseInt(v, 10, 64)
-			if err != nil {
-				return nil, fmt.Errorf("invalid parameter %q", k)
-			}
-		case "zone":
-			zone = v
-		case "networkid":
-			network = v
-		case "reservedipv4cidr", "capacityparinstancegib", "shared":
-			// allowed
-		default:
-			return nil, fmt.Errorf("invalid parameter %q", k)
-		}
-	}
-	return &nas.CreateNASInstanceInput{
-		AllocatedStorage: getAllocatedStorage(capBytes, instanceType),
-		AvailabilityZone: &zone,
-		//MasterPrivateAddress: must set after
-		NASInstanceIdentifier: &name,
-		NASInstanceType: &instanceType,
-		//NASSecurityGroups: must set after
-		NetworkId: &network,
-		Protocol: &protocol,
+		Hatoba:    hatoba.New(cfg),
+		Rdb:       rdb.New(cfg),
+		Region:    region,
 	}, nil
 }
 
@@ -146,36 +91,6 @@ func IsNotFoundErr(err error) bool {
 		return strings.Contains(awsErr.Code(), "NotFound")
 	}
 	return false
-}
-
-func CompareNasInstanceWithInput(n *nas.NASInstance, in *nas.CreateNASInstanceInput) error {
-	mismatches := []string{}
-	if n.NASInstanceType == nil || *n.NASInstanceType != *in.NASInstanceType {
-		mismatches = append(mismatches, "NASInstanceType")
-	}
-	allocatedStorage, _ := strconv.ParseInt(*n.AllocatedStorage, 10, 64)
-	if allocatedStorage != *in.AllocatedStorage {
-		mismatches = append(mismatches, "AllocatedStorage")
-	}
-	if n.NetworkId == nil || *n.NetworkId != *in.NetworkId {
-		mismatches = append(mismatches, "NetworkId")
-	}
-	if n.AvailabilityZone == nil || *n.AvailabilityZone != *in.AvailabilityZone {
-		mismatches = append(mismatches, "AvailabilityZone")
-	}
-	if len(n.NASSecurityGroups) != len(in.NASSecurityGroups) {
-		mismatches = append(mismatches, "Number of NASSecurityGroups")
-		for i := 0; i < len(n.NASSecurityGroups); i++ {
-			if *n.NASSecurityGroups[i].NASSecurityGroupName != in.NASSecurityGroups[i] {
-				mismatches = append(mismatches, "NASSecurityGroupName")
-			}
-		}
-	}
-
-	if len(mismatches) > 0 {
-		return fmt.Errorf("instance %v already exists but doesn't match expected: %+v", n.NASInstanceIdentifier, mismatches)
-	}
-	return nil
 }
 
 func (c *Cloud) ListNasInstances(ctx context.Context) ([]nas.NASInstance, error) {
@@ -296,4 +211,92 @@ func (c *Cloud) RevokeCIDRIP(ctx context.Context, name, cidrip string) (*nas.NAS
 		return nil, err
 	}
 	return output.NASSecurityGroup, nil
+}
+
+// hatoba
+
+func (c *Cloud) ListClusters(ctx context.Context) ([]hatoba.Cluster, error) {
+	// Call list clusters
+	req := c.Hatoba.ListClustersRequest(&hatoba.ListClustersInput{})
+	output, err := req.Send(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return output.Clusters, nil
+}
+
+// computing
+
+func (c *Cloud) ListInstances(ctx context.Context) ([]computing.InstancesSet, error) {
+	// Call describe Instances
+	req := c.Computing.DescribeInstancesRequest(&computing.DescribeInstancesInput{})
+	output, err := req.Send(ctx)
+	if err != nil {
+		return nil, err
+	}
+	instances := []computing.InstancesSet{}
+	for _, r := range output.ReservationSet {
+		instances = append(instances, r.InstancesSet...)
+	}
+	return instances, nil
+}
+
+func (c *Cloud) GetPrivateLan(ctx context.Context, networkId string) (*computing.PrivateLanSet, error) {
+	// Call NiftyDescribePrivateLans
+	req := c.Computing. NiftyDescribePrivateLansRequest(&computing.NiftyDescribePrivateLansInput{
+		NetworkId: []string{networkId},
+	})
+	output, err := req.Send(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &output.PrivateLanSet[0], nil
+}
+
+func (c *Cloud) GetDhcpStatus(ctx context.Context, networkId, routerId string) (
+	[]computing.IpAddressPoolSet, []computing.DhcpIpAddressSet, error) {
+
+	// Call NiftyDescribeDhcpStatus
+	req := c.Computing. NiftyDescribeDhcpStatusRequest(&computing.NiftyDescribeDhcpStatusInput{
+		RouterId: &routerId,
+	})
+	output, err := req.Send(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	pools := []computing.IpAddressPoolSet{}
+	ips := []computing.DhcpIpAddressSet{}
+	for _, i := range output.DhcpStatusInformationSet {
+		if *i.NetworkId != networkId {
+			continue
+		}
+		pools = append(pools, i.DhcpIpAddressInformation.IpAddressPoolSet...)
+		for _, ip := range i.DhcpIpAddressInformation.DhcpIpAddressSet {
+			if pstr(ip.LeaseType) == "static" {
+				ips = append(ips, ip)
+			}
+		}
+	}
+	return pools, ips, nil
+}
+
+// rdb
+
+func (c *Cloud) ListRdbInstances(ctx context.Context) ([]rdb.DBInstance, error) {
+	// Call list DB Instances
+	req := c.Rdb.DescribeDBInstancesRequest(&rdb.DescribeDBInstancesInput{})
+	output, err := req.Send(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return output.DBInstances, nil
+}
+
+// util
+
+func pstr(pstr *string) string {
+	if pstr == nil {
+		return ""
+	}
+	return *pstr
 }

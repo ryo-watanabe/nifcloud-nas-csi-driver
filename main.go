@@ -38,6 +38,8 @@ var (
 	kubeconfig    = flag.String("kubeconfig", "", "kubeconfig file path")
 	runController = flag.Bool("controller", false, "run controller service")
 	runNode       = flag.Bool("node", false, "run node service")
+	privateIpReg  = flag.Bool("privateipreg", false, "get private ip from network interface")
+	configurator  = flag.Bool("configurator", true, "run configurator")
 
 	version = "v0.0.1"
 	revision = "undef"
@@ -93,6 +95,8 @@ func main() {
 		Cloud:         provider,
 		KubeClient:    kubeClient,
 		SnapClient:    snapClient,
+		PrivateIpReg:  *privateIpReg,
+		Configurator:  *configurator,
 	}
 
 	nfnsDriver, err := driver.NewNifcloudNasDriver(config)

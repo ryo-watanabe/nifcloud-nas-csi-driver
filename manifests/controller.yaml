@@ -39,8 +39,6 @@ spec:
             - name: socket-dir
               mountPath: /csi
         - name: nifcloud-nas-driver
-          securityContext:
-            privileged: true
           imagePullPolicy: Always
           image: [image]:[tag]
           args:
