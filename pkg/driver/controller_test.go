@@ -600,6 +600,7 @@ func initCreateVolumeResquest(name string, capReq, capLim int64, cidr string, sh
 		CapacityRange: &csi.CapacityRange{RequiredBytes: capReq, LimitBytes: capLim},
 		Parameters: map[string]string{},
 	}
+	req.Parameters["networkId"] = "default"
 	if cidr != "" {
 		req.Parameters["reservedIpv4Cidr"] = cidr
 	}
@@ -798,7 +799,7 @@ func (c *FakeCloud) ListNasInstances(ctx context.Context) ([]nas.NASInstance, er
 func (c *FakeCloud) CreateNasInstance(ctx context.Context, in *nas.CreateNASInstanceInput) (*nas.NASInstance, error) {
 	c.Actions = append(c.Actions, "CreateNasInstance/" + *in.NASInstanceIdentifier)
 	storage := fmt.Sprintf("%d", *in.AllocatedStorage)
-	pIp := strings.SplitN(*in.MasterPrivateAddress, "/", 2)
+	pIp := strings.SplitN(pstr(in.MasterPrivateAddress), "/", 2)
 	ip := pIp[0]
 	n := nas.NASInstance{
 		AllocatedStorage: &storage,
