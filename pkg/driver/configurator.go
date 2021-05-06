@@ -132,18 +132,20 @@ func (c *Configurator) configure(configureClasses bool) error {
 		for _, vm := range vms {
 			for i, nc := range c.nodes {
 				if pstr(vm.IpAddress) == nc.publicIP {
-					vmFound++
 					for _, nif := range vm.NetworkInterfaceSet {
 						if pstr(nif.PrivateIpAddress) == pstr(vm.PrivateIpAddress) {
 							networkId = pstr(nif.NiftyNetworkId)
 						}
 					}
 					c.nodes[i].privateIP = pstr(vm.PrivateIpAddress)
-					zone = pstr(vm.Placement.AvailabilityZone)
+					if vm.Placement != nil {
+						zone = pstr(vm.Placement.AvailabilityZone)
+					}
+					vmFound++
 				}
 			}
 		}
-		if vmFound == len(c.nodes) {
+		if vmFound == len(c.nodes) && networkId != "" && zone != "" {
 			if configureClasses {
 				c.networkId = networkId
 				c.zone = zone

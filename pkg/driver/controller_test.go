@@ -13,6 +13,7 @@ import (
 	"golang.org/x/net/context"
 	"github.com/aws/aws-sdk-go-v2/aws/awserr"
 	"github.com/nifcloud/nifcloud-sdk-go/service/nas"
+	"github.com/nifcloud/nifcloud-sdk-go/service/computing"
 	"github.com/ryo-watanabe/nfcl-nas-csi-driver/pkg/util"
 	corev1 "k8s.io/api/core/v1"
 	batchv1 "k8s.io/api/batch/v1"
@@ -747,6 +748,7 @@ func newNamespace(name, uid string) *corev1.Namespace {
 }
 
 type FakeCloud struct {
+	Instances []computing.InstancesSet
 	NasInstances []nas.NASInstance
 	NasSecurityGroups []nas.NASSecurityGroup
 	Actions []string

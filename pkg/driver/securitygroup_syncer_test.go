@@ -46,7 +46,7 @@ func initObjects() []runtime.Object {
 	return []runtime.Object{
 		newCSINode("testNodeID1", "1.1.1.1"),
 		newCSINode("testNodeID2", "1.1.1.2"),
-		newStorageClass("testStorageClass", testZone),
+		newStorageClass("testStorageClass", testZone, "", ""),
 	}
 }
 
@@ -169,7 +169,7 @@ func TestSecuritygroupSync(t *testing.T) {
 				newCSINode("testNodeID1", "1.1.1.1"),
 				newCSINode("testNodeID2", "1.1.1.2"),
 				newCSINode("testNodeID3", "1.1.1.3"),
-				newStorageClass("testStorageClass", testZone),
+				newStorageClass("testStorageClass", testZone, "", ""),
 			},
 			pre_sgs: []nas.NASSecurityGroup{initSecurityGroup()},
 			last_sgs: &lastSGInputs,
@@ -193,7 +193,7 @@ func TestSecuritygroupSync(t *testing.T) {
 			pre_tsk: true,
 			pre_obj: []runtime.Object{
 				newCSINode("testNodeID1", "1.1.1.1"),
-				newStorageClass("testStorageClass", testZone),
+				newStorageClass("testStorageClass", testZone, "", ""),
 			},
 			pre_sgs: []nas.NASSecurityGroup{initSecurityGroup()},
 			last_sgs: &lastSGInputs,
@@ -216,7 +216,7 @@ func TestSecuritygroupSync(t *testing.T) {
 			pre_tsk: true,
 			pre_obj: []runtime.Object{
 				newCSINode("testNodeID1", "1.1.1.1"),
-				newStorageClass("testStorageClass", testZone),
+				newStorageClass("testStorageClass", testZone, "", ""),
 			},
 			pre_sgs: []nas.NASSecurityGroup{nas.NASSecurityGroup{
 				AvailabilityZone: &testZone,
@@ -314,14 +314,9 @@ func initTestSecuritygroupSyncer(
 }
 
 func newCSINode(name, ip string) *storagev1.CSINode {
-	return &storagev1.CSINode{
+	csinode := &storagev1.CSINode{
 		TypeMeta: metav1.TypeMeta{APIVersion: "storage.k8s.io/v1", Kind: "CSINode"},
-		ObjectMeta: metav1.ObjectMeta{
-			Name: name,
-			Annotations: map[string]string{
-				"testDriverName/privateIp": ip,
-			},
-		},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Annotations: map[string]string{}},
 		Spec: storagev1.CSINodeSpec{
 			Drivers: []storagev1.CSINodeDriver{
 				storagev1.CSINodeDriver{
@@ -331,19 +326,29 @@ func newCSINode(name, ip string) *storagev1.CSINode {
 			},
 		},
 	}
+	if ip != "" {
+		csinode.ObjectMeta.Annotations["testDriverName/privateIp"] = ip
+	}
+	return csinode
 }
 
-func newStorageClass(name, zone string) *storagev1.StorageClass {
-	return &storagev1.StorageClass{
+func newStorageClass(name, zone, networkId, cidr string) *storagev1.StorageClass {
+	class := &storagev1.StorageClass{
 		TypeMeta: metav1.TypeMeta{APIVersion: "storage.k8s.io/v1", Kind: "StorageClass"},
-		ObjectMeta: metav1.ObjectMeta{
-			Name: name,
-		},
+		ObjectMeta: metav1.ObjectMeta{Name: name},
 		Provisioner: "testDriverName",
-		Parameters: map[string]string{
-			"zone": zone,
-		},
+		Parameters: map[string]string{},
 	}
+	if zone != "" {
+		class.Parameters["zone"] = zone
+	}
+	if networkId != "" {
+		class.Parameters["networkId"] = networkId
+	}
+	if cidr != "" {
+		class.Parameters["reservedIpv4Cidr"] = cidr
+	}
+	return class
 }
 
 // FakeCloud implementation
