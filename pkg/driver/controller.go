@@ -171,6 +171,99 @@ func (s *controllerServer) waitForNASInstanceAvailable(name string) error {
 	return backoff.RetryNotify(chkNasInstanceAvailable, b, retryNotify)
 }
 
+// NAS capacity string
+func getAllocatedStorage(capBytes int64, instanceType int64) *int64 {
+
+	var allocatedStorage int64
+	allocatedStorage = 100
+	if instanceType == 1 {
+		allocatedStorage = 1000
+	}
+
+	for i := 1; i < 10; i++ {
+		if instanceType == 1 {
+			allocatedStorage = int64(i) * 1000
+		} else {
+			allocatedStorage = int64(i) * 100
+		}
+		if util.GbToBytes(allocatedStorage) >= capBytes {
+			break
+		}
+	}
+
+	return &allocatedStorage
+}
+
+// CreateVolume parameters
+func GenerateNasInstanceInput(name string, capBytes int64, params map[string]string) (*nas.CreateNASInstanceInput, error) {
+	// Set default parameters
+	var instanceType int64
+	instanceType = 0
+	zone := "east-11"
+	network := "net-COMMON_PRIVATE"
+	protocol := "nfs"
+	var err error
+
+	// Validate parameters (case-insensitive).
+	for k, v := range params {
+		switch strings.ToLower(k) {
+		case "instancetype":
+			instanceType, err = strconv.ParseInt(v, 10, 64)
+			if err != nil {
+				return nil, fmt.Errorf("invalid parameter %q", k)
+			}
+		case "zone":
+			zone = v
+		case "networkid":
+			network = v
+		case "reservedipv4cidr", "capacityparinstancegib", "shared":
+			// allowed
+		default:
+			return nil, fmt.Errorf("invalid parameter %q", k)
+		}
+	}
+	return &nas.CreateNASInstanceInput{
+		AllocatedStorage: getAllocatedStorage(capBytes, instanceType),
+		AvailabilityZone: &zone,
+		//MasterPrivateAddress: must set after
+		NASInstanceIdentifier: &name,
+		NASInstanceType: &instanceType,
+		//NASSecurityGroups: must set after
+		NetworkId: &network,
+		Protocol: &protocol,
+	}, nil
+}
+
+func CompareNasInstanceWithInput(n *nas.NASInstance, in *nas.CreateNASInstanceInput) error {
+	mismatches := []string{}
+	if *n.NASInstanceType != *in.NASInstanceType {
+		mismatches = append(mismatches, "NASInstanceType")
+	}
+	allocatedStorage, _ := strconv.ParseInt(pstr(n.AllocatedStorage), 10, 64)
+	if allocatedStorage != *in.AllocatedStorage {
+		mismatches = append(mismatches, "AllocatedStorage")
+	}
+	if pstr(n.NetworkId) != pstr(in.NetworkId) {
+		mismatches = append(mismatches, "NetworkId")
+	}
+	if pstr(n.AvailabilityZone) != pstr(in.AvailabilityZone) {
+		mismatches = append(mismatches, "AvailabilityZone")
+	}
+	if len(n.NASSecurityGroups) != len(in.NASSecurityGroups) {
+		mismatches = append(mismatches, "Number of NASSecurityGroups")
+		for i := 0; i < len(n.NASSecurityGroups); i++ {
+			if *n.NASSecurityGroups[i].NASSecurityGroupName != in.NASSecurityGroups[i] {
+				mismatches = append(mismatches, "NASSecurityGroupName")
+			}
+		}
+	}
+
+	if len(mismatches) > 0 {
+		return fmt.Errorf("instance %v already exists but doesn't match expected: %+v", n.NASInstanceIdentifier, mismatches)
+	}
+	return nil
+}
+
 // CreateVolume creates a NAS instance
 func (s *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequest) (res *csi.CreateVolumeResponse, err error) {
 	glog.V(4).Infof("CreateVolume called with request %v", *req)
@@ -213,11 +306,16 @@ func (s *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 
 	glog.V(5).Infof("Using capacity bytes %q for volume %q", capBytes, name)
 
-	nasInput, err := cloud.GenerateNasInstanceInput(name, capBytes, req.GetParameters())
+	nasInput, err := GenerateNasInstanceInput(name, capBytes, req.GetParameters())
 	if err != nil {
 		err = status.Error(codes.InvalidArgument, err.Error())
 		return
 	}
+	if pstr(nasInput.NetworkId) == "net-COMMON_PRIVATE" {
+		// Common private networkId must set nil for API
+		nasInput.NetworkId = nil
+	}
+
 	securityGroupName, err := getSecurityGroupName(ctx, s.config.driver)
 	if err != nil {
 		err = status.Error(codes.InvalidArgument, err.Error())
@@ -247,43 +345,46 @@ func (s *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 	}
 	if n != nil {
 		// Instance already exists, check if it meets the request
-		if err = cloud.CompareNasInstanceWithInput(n, nasInput); err != nil {
+		if err = CompareNasInstanceWithInput(n, nasInput); err != nil {
 			err = status.Error(codes.AlreadyExists, err.Error())
 			return
 		}
 
 	} else {
-		// If we are creating a new instance, we need pick an unused ip from reserved-ipv4-cidr
-		var reservedIPv4CIDR string
-		reservedIPv4CIDR, err = getIpv4CiderFromPVC(ctx, req.GetName(), s.config.driver)
-		if err != nil {
-			err = status.Error(codes.InvalidArgument, err.Error())
-			return
-		}
-		if reservedIPv4CIDR == "" {
-			reservedIPv4CIDR = req.GetParameters()["reservedIpv4Cidr"]
-			if reservedIPv4CIDR == "" {
-				err = status.Error(codes.InvalidArgument, "reservedIpv4Cidr must be provided")
+		if nasInput.NetworkId != nil {
+
+			// If we are creating a new instance, we need pick an unused ip from reserved-ipv4-cidr
+			var reservedIPv4CIDR string
+			reservedIPv4CIDR, err = getIpv4CiderFromPVC(ctx, req.GetName(), s.config.driver)
+			if err != nil {
+				err = status.Error(codes.InvalidArgument, err.Error())
 				return
 			}
-			glog.V(4).Infof("Using reserved IPv4 CIDR of storage class : %s", reservedIPv4CIDR)
-		} else {
-			glog.V(4).Infof("Using reserved IPv4 CIDR of PVC : %s", reservedIPv4CIDR)
-		}
-		var reservedIP string
-		reservedIP, err = s.reserveIP(ctx, reservedIPv4CIDR)
+			if reservedIPv4CIDR == "" {
+				reservedIPv4CIDR = req.GetParameters()["reservedIpv4Cidr"]
+				if reservedIPv4CIDR == "" {
+					err = status.Error(codes.InvalidArgument, "reservedIpv4Cidr must be provided")
+					return
+				}
+				glog.V(4).Infof("Using reserved IPv4 CIDR of storage class : %s", reservedIPv4CIDR)
+			} else {
+				glog.V(4).Infof("Using reserved IPv4 CIDR of PVC : %s", reservedIPv4CIDR)
+			}
+			var reservedIP string
+			reservedIP, err = s.reserveIP(ctx, reservedIPv4CIDR)
 
-		// Possible cases are 1) CreateInstanceAborted, 2)CreateInstance running in background
-		// The ListInstances response will contain the reservedIPs if the operation was started
-		// In case of abort, the IP is released and available for reservation
-		defer s.config.ipAllocator.ReleaseIP(reservedIP)
-		if err != nil {
-			return
-		}
-		reservedIP = reservedIP + "/24"
+			// Possible cases are 1) CreateInstanceAborted, 2)CreateInstance running in background
+			// The ListInstances response will contain the reservedIPs if the operation was started
+			// In case of abort, the IP is released and available for reservation
+			defer s.config.ipAllocator.ReleaseIP(reservedIP)
+			if err != nil {
+				return
+			}
+			reservedIP = reservedIP + "/24"
 
-		// Adding the reserved IP to the instance input
-		nasInput.MasterPrivateAddress = &reservedIP
+			// Adding the reserved IP to the instance input
+			nasInput.MasterPrivateAddress = &reservedIP
+		}
 
 		// Create the instance
 		glog.V(4).Infof("Create NAS Instance called with input %v", nasInput)

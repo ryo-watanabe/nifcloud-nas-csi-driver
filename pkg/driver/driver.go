@@ -45,6 +45,8 @@ type NifcloudNasDriverConfig struct {
 	KubeClient    kubernetes.Interface  // k8s client
 	SnapClient    clientset.Interface  // snapshot client
 	InitBackoff   time.Duration
+	PrivateIpReg  bool
+	Configurator  bool
 }
 
 type NifcloudNasDriver struct {
@@ -216,14 +218,25 @@ func (driver *NifcloudNasDriver) Run(endpoint string) {
 	driver.sv = NewNonBlockingGRPCServer()
 	driver.sv.Start(endpoint, driver.ids, driver.cs, driver.ns)
 
-	// Start NAS Security Group Sync
+	// Start Configurator and NAS SecurityGroup sync on controller
 	if driver.cs != nil {
+		// Configurator
+		if driver.config.Configurator {
+			conf := newConfigurator(driver)
+			err := conf.Init()
+			if err != nil {
+				glog.Errorf("Error in Configurator initilization : %s", err.Error())
+			}
+			go wait.Forever(conf.runUpdate, time.Duration(conf.chkIntvl) * time.Second)
+		}
+
+		// Security Group syncer
 		syncer := newNSGSyncer(driver)
 		go wait.Forever(syncer.runNSGSyncer, time.Duration(syncer.SyncPeriod) * time.Second)
 	}
 
 	// Register node private IP
-	if driver.ns != nil {
+	if driver.ns != nil && driver.config.PrivateIpReg {
 		b := backoff.NewExponentialBackOff()
 		b.MaxElapsedTime = time.Duration(60) * time.Second
 		b.RandomizationFactor = 0.2

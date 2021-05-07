@@ -426,6 +426,7 @@ func TestRegisterNodePrivateIP(t *testing.T) {
 		KubeClient:    kubeClient,
 		PrivateIfName: "lo",
 		InitBackoff:   1,
+		PrivateIpReg:  true,
 	}
 
 	driver, _ := NewNifcloudNasDriver(config)

@@ -356,7 +356,10 @@ var (
 		Name: "pvc-TESTPVCUID",
 		VolumeCapabilities: initVolumeCapabilities(),
 		CapacityRange: &csi.CapacityRange{RequiredBytes: 10 * util.Gb, LimitBytes: 0},
-		Parameters: map[string]string{"reservedIpv4Cidr": "192.168.100.0/28"},
+		Parameters: map[string]string{
+			"reservedIpv4Cidr": "192.168.100.0/28",
+			"networkId": "default",
+		},
 		VolumeContentSource: &csi.VolumeContentSource{
 			Type: &csi.VolumeContentSource_Snapshot{
 				Snapshot: &csi.VolumeContentSource_SnapshotSource{
