@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
@@ -20,7 +21,7 @@ import (
 	"github.com/nifcloud/nifcloud-sdk-go/service/rdb"
 )
 
-func TestConfiguratorInit(t *testing.T) {
+func TestConfigurator(t *testing.T) {
 
 	cases := map[string]struct {
 		instances []computing.InstancesSet
@@ -36,6 +37,7 @@ func TestConfiguratorInit(t *testing.T) {
 		errmsg string
 		actions []string
 		post_conf *Configurator
+		update bool
 	}{
 		"init private LAN":{
 			instances: []computing.InstancesSet{
@@ -136,6 +138,163 @@ func TestConfiguratorInit(t *testing.T) {
 				cidr: "192.168.0.160/27",
 			},
 		},
+		"not found" : {
+			errmsg: "nodes not found in computing / hatoba",
+		},
+		"private LAN not found":{
+			nodes: []hatoba.Node{
+				initNode("111.0.0.1", "192.168.0.1", "testZone"),
+				initNode("111.0.0.2", "192.168.0.2", "testZone"),
+			},
+			network_id: "net-NotFound",
+			pre_obj: []runtime.Object{
+				newNode("testNodeID1", "111.0.0.1", ""),
+				newNode("testNodeID2", "111.0.0.2", ""),
+				newCSINode("testNodeID1", ""),
+				newCSINode("testNodeID2", ""),
+				newStorageClass("testStorageClass", "testZone", "", ""),
+			},
+			errmsg: "getting private lan net-NotFound : TestAwsErrorNotFound",
+		},
+		"update nothing changed":{
+			update: true,
+			pre_obj: []runtime.Object{
+				newNode("testNodeID1", "111.0.0.1", ""),
+				newNode("testNodeID2", "111.0.0.2", ""),
+				newCSINode("testNodeID1", "192.168.0.1"),
+				newCSINode("testNodeID2", "192.168.0.2"),
+				newStorageClass("testStorageClass", "testZone", "net-TestPrivate", "192.168.0.160/27"),
+			},
+			post_conf: &Configurator{
+				networkId: "net-TestPrivate",
+				zone: "testZone",
+				nodes: []NodeConfig{
+					NodeConfig{name: "testNodeID1", publicIP: "111.0.0.1", privateIP: "192.168.0.1"},
+					NodeConfig{name: "testNodeID2", publicIP: "111.0.0.2", privateIP: "192.168.0.2"},
+				},
+			},
+		},
+		"update node added":{
+			update: true,
+			nodes: []hatoba.Node{
+				initNode("111.0.0.1", "192.168.0.1", "testZone"),
+				initNode("111.0.0.2", "192.168.0.2", "testZone"),
+				initNode("111.0.0.3", "192.168.0.3", "testZone"),
+			},
+			network_id: "net-TestPrivate",
+			pre_obj: []runtime.Object{
+				newNode("testNodeID1", "111.0.0.1", ""),
+				newNode("testNodeID2", "111.0.0.2", ""),
+				newNode("testNodeID3", "111.0.0.3", ""),
+				newCSINode("testNodeID1", "192.168.0.1"),
+				newCSINode("testNodeID2", "192.168.0.2"),
+				newCSINode("testNodeID3", ""),
+				newStorageClass("testStorageClass", "testZone", "net-TestPrivate", "192.168.0.160/27"),
+			},
+			actions: []string{
+				"ListClusters",
+			},
+			post_conf: &Configurator{
+				networkId: "net-TestPrivate",
+				zone: "testZone",
+				nodes: []NodeConfig{
+					NodeConfig{name: "testNodeID1", publicIP: "111.0.0.1", privateIP: "192.168.0.1"},
+					NodeConfig{name: "testNodeID2", publicIP: "111.0.0.2", privateIP: "192.168.0.2"},
+					NodeConfig{name: "testNodeID3", publicIP: "111.0.0.3", privateIP: "192.168.0.3"},
+				},
+			},
+		},
+		"update zone/networkId different between classes":{
+			update: true,
+			nodes: []hatoba.Node{
+				initNode("111.0.0.1", "192.168.0.1", "testZone"),
+				initNode("111.0.0.2", "192.168.0.2", "testZone"),
+			},
+			network_id: "net-COMMON_PRIVATE",
+			pre_obj: []runtime.Object{
+				newNode("testNodeID1", "111.0.0.1", ""),
+				newNode("testNodeID2", "111.0.0.2", ""),
+				newCSINode("testNodeID1", "192.168.0.1"),
+				newCSINode("testNodeID2", "192.168.0.2"),
+				newStorageClass("testStorageClass", "testZone", "net-COMMON_PRIVATE", ""),
+				newStorageClass("testStorageClass2", "testZone2", "net-TestPrivate", "192.168.0.160/27"),
+			},
+			actions: []string{
+				"ListClusters",
+			},
+			post_conf: &Configurator{
+				networkId: "net-COMMON_PRIVATE",
+				zone: "testZone",
+				nodes: []NodeConfig{
+					NodeConfig{name: "testNodeID1", publicIP: "111.0.0.1", privateIP: "192.168.0.1"},
+					NodeConfig{name: "testNodeID2", publicIP: "111.0.0.2", privateIP: "192.168.0.2"},
+				},
+			},
+		},
+		"init cidr block too small":{
+			nodes: []hatoba.Node{
+				initNode("111.0.0.1", "192.168.0.1", "testZone"),
+				initNode("111.0.0.2", "192.168.0.2", "testZone"),
+			},
+			network_id: "net-TestPrivate",
+			lan_cidr: "192.168.0.0/28",
+			pre_obj: []runtime.Object{
+				newNode("testNodeID1", "111.0.0.1", ""),
+				newNode("testNodeID2", "111.0.0.2", ""),
+				newCSINode("testNodeID1", ""),
+				newCSINode("testNodeID2", ""),
+				newStorageClass("testStorageClass", "testZone", "", ""),
+			},
+			errmsg: "initialing recommended cidr divs : mask offset must be positive value",
+		},
+		"init cannot determine cidr":{
+			nodes: []hatoba.Node{
+				initNode("111.0.0.1", "192.168.0.1", "testZone"),
+				initNode("111.0.0.2", "192.168.0.2", "testZone"),
+			},
+			network_id: "net-TestPrivate",
+			lan_cidr: "192.168.0.0/24",
+			router_id: "testRouterId",
+			pool_start: "192.168.0.32",
+			pool_stop: "192.168.0.127",
+			db_ip: "192.168.0.130",
+			dhcp_ips: []string{
+				"192.168.0.161",
+				"192.168.0.193",
+			},
+			pre_obj: []runtime.Object{
+				newNode("testNodeID1", "111.0.0.1", ""),
+				newNode("testNodeID2", "111.0.0.2", ""),
+				newCSINode("testNodeID1", ""),
+				newCSINode("testNodeID2", ""),
+				newStorageClass("testStorageClass", "testZone", "", ""),
+			},
+			actions: []string{
+				"ListClusters",
+				"GetPrivateLan/net-TestPrivate",
+				"ListRdbInstances",
+				"GetDhcpStatus/net-TestPrivate/testRouterId",
+			},
+			post_conf: &Configurator{
+				networkId: "net-TestPrivate",
+				zone: "testZone",
+				nodes: []NodeConfig{
+					NodeConfig{name: "testNodeID1", publicIP: "111.0.0.1", privateIP: "192.168.0.1"},
+					NodeConfig{name: "testNodeID2", publicIP: "111.0.0.2", privateIP: "192.168.0.2"},
+				},
+			},
+		},
+		"nodes without public IPs":{
+			update: true,
+			pre_obj: []runtime.Object{
+				newNode("testNodeID1", "10.100.0.1", "172.20.0.1"),
+				newNode("testNodeID2", "10.100.0.2", "172.20.0.2"),
+				newCSINode("testNodeID1", "172.20.0.1"),
+				newCSINode("testNodeID2", "172.20.0.2"),
+				newStorageClass("testStorageClass", "testZone", "net-TestPrivate", "192.168.0.160/27"),
+			},
+			errmsg: "node testNodeID1 does not have public IP",
+		},
 	}
 
 	flag.Set("logtostderr", "true")
@@ -154,7 +313,14 @@ func TestConfiguratorInit(t *testing.T) {
 		poolStop = c.pool_stop
 		setDhcpIpAddresses(c.dhcp_ips)
 		initDB(c.db_ip, c.network_id)
-		err := conf.Init()
+
+		var err error
+		if c.update {
+			err = conf.Update()
+		} else {
+			err = conf.Init()
+		}
+
 		if c.errmsg == "" {
 			if err != nil {
 				t.Errorf("unexpected error in case [%s] : %s", name, err.Error())
@@ -171,6 +337,72 @@ func TestConfiguratorInit(t *testing.T) {
 				t.Errorf("error message not matched in case [%s]\nmust contains : %s\nbut got : %s", name, c.errmsg, err.Error())
 			}
 		}
+	}
+}
+
+func TestRunConfigurator(t *testing.T) {
+	// log
+	flag.Set("logtostderr", "true")
+	flag.Lookup("v").Value.Set("5")
+	flag.Parse()
+
+	// test k8s
+	kubeobjects := []runtime.Object{
+		newNode("testNodeID1", "111.0.0.1", ""),
+		newCSINode("testNodeID1", ""),
+		newNamespace("kube-system", "TESTCLUSTERUID"),
+	}
+	kubeClient := k8sfake.NewSimpleClientset(kubeobjects...)
+
+	// test cloud
+	cloud := newFakeCloud()
+	initCluster(
+		"testCluster",
+		"net-COMMON_PRIVATE",
+		[]hatoba.Node{
+			initNode("111.0.0.1", "192.168.0.1", "testZone"),
+		},
+	)
+
+	config := &NifcloudNasDriverConfig{
+		Name:          "testDriverName",
+		Version:       "testDriverVersion",
+		NodeID:        "testNodeID",
+		RunController: true,
+		RunNode:       false,
+		KubeClient:    kubeClient,
+		Cloud:         cloud,
+		InitBackoff:   1,
+		Configurator:  true,
+	}
+
+	driver, _ := NewNifcloudNasDriver(config)
+	go func(){
+		driver.Run("unix:/tmp/csi.sock")
+	}()
+	time.Sleep(time.Duration(2) * time.Second)
+	driver.Stop()
+
+	// check cloud actions
+	exp_actions := []string{
+		"ListClusters",
+		"GetNasSecurityGroup/cluster-TESTCLUSTERUID",
+		"CreateNasSecurityGroup/cluster-TESTCLUSTERUID",
+		"AuthorizeCIDRIP/cluster-TESTCLUSTERUID/192.168.0.1/32",
+	}
+	if !reflect.DeepEqual(exp_actions, cloud.Actions) {
+		t.Errorf("cloud action not matched\nexpected : %v\nbut got  : %v", exp_actions, cloud.Actions)
+	}
+
+	// check storage class parameters
+	exp := newStorageClass("csi-nifcloud-nas-std", "testZone", "net-COMMON_PRIVATE", "")
+	exp.Parameters["instanceType"] = "0"
+	got, err := kubeClient.StorageV1().StorageClasses().Get(context.TODO(), "csi-nifcloud-nas-std", metav1.GetOptions{})
+	if err != nil {
+		t.Errorf("error getting storageclass : %s", err.Error())
+	}
+	if !reflect.DeepEqual(exp, got) {
+		t.Errorf("storageclass not matched\nexpected : %v\nbut got  : %v", exp, got)
 	}
 }
 

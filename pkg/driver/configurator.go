@@ -171,9 +171,9 @@ func (c *Configurator) configure(configureClasses bool) error {
 		if err != nil {
 			return fmt.Errorf("getting private lan %s : %s", c.networkId, err.Error())
 		}
-		_, lanCidrBlk, err := net.ParseCIDR(*lan.CidrBlock)
+		_, lanCidrBlk, err := net.ParseCIDR(pstr(lan.CidrBlock))
 		if err != nil {
-			return fmt.Errorf("parsing cidr block %s : %s", *lan.CidrBlock, err.Error())
+			return fmt.Errorf("parsing cidr block %s : %s", pstr(lan.CidrBlock), err.Error())
 		}
 		glog.V(4).Infof("Configurator : private LAN CIDR block %s", lanCidrBlk.String())
 		lanMask, bits := lanCidrBlk.Mask.Size()
@@ -197,7 +197,7 @@ func (c *Configurator) configure(configureClasses bool) error {
 			return fmt.Errorf("getting RDB list : %s", err.Error())
 		}
 		for _, db := range dbs {
-			if *db.NiftyNetworkId == c.networkId {
+			if pstr(db.NiftyNetworkId) == c.networkId {
 				glog.V(4).Infof("Configurator : dropping CIDR div with rdb IP %s", pstr(db.NiftyMasterPrivateAddress))
 				err = rcmdCidrBlks.dropWithIP(pstr(db.NiftyMasterPrivateAddress))
 				if err != nil {
@@ -285,6 +285,9 @@ func (c *Configurator) getNodeConfigs() (bool, error) {
 					nc.publicIP = addr.Address
 				}
 			}
+		}
+		if nc.publicIP == "" {
+			return mustUpdate, fmt.Errorf("GetNodeConfigs : node %s does not have public IP", nc.name)
 		}
 		nodeConfigs = append(nodeConfigs, nc)
 	}
