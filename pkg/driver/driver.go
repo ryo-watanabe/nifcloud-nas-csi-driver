@@ -30,7 +30,7 @@ import (
 	"github.com/cenkalti/backoff"
 	clientset "github.com/kubernetes-csi/external-snapshotter/client/v3/clientset/versioned"
 
-	"github.com/ryo-watanabe/nfcl-nas-csi-driver/pkg/cloud"
+	"github.com/ryo-watanabe/nifcloud-nas-csi-driver/pkg/cloud"
 )
 
 type NifcloudNasDriverConfig struct {

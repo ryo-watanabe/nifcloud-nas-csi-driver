@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"k8s.io/client-go/kubernetes"
-	//"github.com/ryo-watanabe/nfcl-nas-csi-driver/pkg/cloud"
+	//"github.com/ryo-watanabe/nifcloud-nas-csi-driver/pkg/cloud"
 )
 
 const testDriverName = "nas.csi.storage.nifcloud.com"

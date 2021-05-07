@@ -14,7 +14,7 @@ import (
 	storagev1 "k8s.io/api/storage/v1"
 
 	"github.com/nifcloud/nifcloud-sdk-go/service/computing"
-	"github.com/ryo-watanabe/nfcl-nas-csi-driver/pkg/cloud"
+	"github.com/ryo-watanabe/nifcloud-nas-csi-driver/pkg/cloud"
 )
 
 type NodeConfig struct {

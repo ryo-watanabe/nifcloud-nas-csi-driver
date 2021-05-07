@@ -10,7 +10,7 @@ import (
 	"github.com/golang/protobuf/ptypes"
 	csi "github.com/container-storage-interface/spec/lib/go/csi"
 	"golang.org/x/net/context"
-	"github.com/ryo-watanabe/nfcl-nas-csi-driver/pkg/util"
+	"github.com/ryo-watanabe/nifcloud-nas-csi-driver/pkg/util"
 	"k8s.io/apimachinery/pkg/runtime"
 	snapfake "github.com/kubernetes-csi/external-snapshotter/client/v3/clientset/versioned/fake"
 	snapv1 "github.com/kubernetes-csi/external-snapshotter/client/v3/apis/volumesnapshot/v1beta1"

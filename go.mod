@@ -1,4 +1,4 @@
-module github.com/ryo-watanabe/nfcl-nas-csi-driver
+module github.com/ryo-watanabe/nifcloud-nas-csi-driver
 
 go 1.14
 

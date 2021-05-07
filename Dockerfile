@@ -1,4 +1,4 @@
 FROM alpine
 RUN apk add --no-cache ca-certificates nfs-utils
-COPY nfcl-nas-csi-driver /
-ENTRYPOINT ["/nfcl-nas-csi-driver"]
+COPY nifcloud-nas-csi-driver /
+ENTRYPOINT ["/nifcloud-nas-csi-driver"]

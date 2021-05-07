@@ -14,7 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws/awserr"
 	"github.com/nifcloud/nifcloud-sdk-go/service/nas"
 	"github.com/nifcloud/nifcloud-sdk-go/service/computing"
-	"github.com/ryo-watanabe/nfcl-nas-csi-driver/pkg/util"
+	"github.com/ryo-watanabe/nifcloud-nas-csi-driver/pkg/util"
 	corev1 "k8s.io/api/core/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"

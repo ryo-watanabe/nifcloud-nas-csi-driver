@@ -36,7 +36,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/apimachinery/pkg/api/errors"
 
-	"github.com/ryo-watanabe/nfcl-nas-csi-driver/pkg/util"
+	"github.com/ryo-watanabe/nifcloud-nas-csi-driver/pkg/util"
 )
 
 // Convert CreateVolumeRequest into shared

@@ -25,8 +25,8 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/utils/mount"
-	"github.com/ryo-watanabe/nfcl-nas-csi-driver/pkg/cloud"
-	"github.com/ryo-watanabe/nfcl-nas-csi-driver/pkg/driver"
+	"github.com/ryo-watanabe/nifcloud-nas-csi-driver/pkg/cloud"
+	"github.com/ryo-watanabe/nifcloud-nas-csi-driver/pkg/driver"
 	clientset "github.com/kubernetes-csi/external-snapshotter/client/v3/clientset/versioned"
 )
 
