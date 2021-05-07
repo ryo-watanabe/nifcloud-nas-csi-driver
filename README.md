@@ -1,2 +1,2 @@
-# nfcl-nas-csi-driver
-CSI driver for k8s on nifcloud
+# nifcloud-nas-csi-driver
+CSI nas driver for k8s clasters running on nifcloud
