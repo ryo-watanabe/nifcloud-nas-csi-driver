@@ -2,11 +2,11 @@
 NAS CSI driver for k8s clusters running on nifcloud
 
 ## Features
-- Create nifcloud NASInstances triggered by PersistentVolumeClaims(PVCs) creation.
-- Nas private IPs selected from CIDRIP set as PVC's annotation or StorageClass parameters.
-- Authorize/Revoke node private IPs in NASSecurityGroup. Node private IPs kept on CSINode annotation
+- Create nifcloud NASInstances triggered by PVCs creation.
 - Shared NASInstance for multiple PVCs with source path provisioning
 - Auto configure node private IPs, zone, networkID and recommended CIDR block for NASInstances.
+- NAS private IP selected from CIDR block of storageclass parameter or PVC annotation.
+- Authorize/Revoke node private IPs onto NASSecurityGroup (Node private IPs kept on CSINode annotation).
 - Delete NASInstances on deletion of the PVC
 
 ## Options
@@ -212,5 +212,3 @@ spec:
 ```
 - IP address like "192.168.10.64" can be used same as "192.168.10.64/32"
 - If no annotations set, StorageClass parameter reservedIPv4Cidr is used for private IP selection
-
-### Shared NAS source path provisioning
