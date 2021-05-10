@@ -444,6 +444,7 @@ func (c *Configurator) installStorageClasses() error {
 	standard := true
 	hispeed := true
 	shared := true
+	sharedhi := true
 	cls, err := c.kubeClient.StorageV1().StorageClasses().List(c.ctx, metav1.ListOptions{})
 	if err != nil {
 		return fmt.Errorf("getting storageclasses in installStorageClasses : %s", err.Error())
@@ -460,6 +461,9 @@ func (c *Configurator) installStorageClasses() error {
 		}
 		if cl.Parameters["instanceType"] == "0" && cl.Parameters["shared"] == "true" {
 			shared = false
+		}
+		if cl.Parameters["instanceType"] == "1" && cl.Parameters["shared"] == "true" {
+			sharedhi = false
 		}
 	}
 
@@ -494,6 +498,15 @@ func (c *Configurator) installStorageClasses() error {
 			return fmt.Errorf("creating storageclass in installStorageClasses : %s", err.Error())
 		}
 		glog.V(4).Infof("Configurator : storageclass csi-nifcloud-nas-shrd installed")
+	}
+	if sharedhi {
+		newClass.SetName("csi-nifcloud-nas-shrdhi")
+		newClass.Parameters = map[string]string{"instanceType": "1", "shared": "true", "capacityParInstanceGiB": "1000"}
+		_, err = c.kubeClient.StorageV1().StorageClasses().Create(c.ctx, newClass, metav1.CreateOptions{})
+		if err != nil {
+			return fmt.Errorf("creating storageclass in installStorageClasses : %s", err.Error())
+		}
+		glog.V(4).Infof("Configurator : storageclass csi-nifcloud-nas-shrdhi installed")
 	}
 
 	return nil
