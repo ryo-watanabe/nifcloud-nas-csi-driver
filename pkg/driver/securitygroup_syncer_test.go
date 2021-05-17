@@ -23,11 +23,9 @@ var (
 	testCidrIP1 = "1.1.1.1/32"
 	testCidrIP2 = "1.1.1.2/32"
 	testCidrIP3 = "1.1.1.3/32"
-	lastSGInputs = map[string]nas.CreateNASSecurityGroupInput{
-		testSecurityGroupName: nas.CreateNASSecurityGroupInput{
-			AvailabilityZone: &testZone,
-			NASSecurityGroupName: &testSecurityGroupName,
-		},
+	lastSGInput = nas.CreateNASSecurityGroupInput{
+		AvailabilityZone: &testZone,
+		NASSecurityGroupName: &testSecurityGroupName,
 	}
 )
 
@@ -63,7 +61,7 @@ func TestSecuritygroupSync(t *testing.T) {
 		pre_tsk bool
 		pre_obj []runtime.Object
 		pre_sgs []nas.NASSecurityGroup
-		last_sgs *map[string]nas.CreateNASSecurityGroupInput
+		last_sg *nas.CreateNASSecurityGroupInput
 		last_ips *map[string]bool
 		errmsg string
 		exp_sgs []nas.NASSecurityGroup
@@ -111,7 +109,7 @@ func TestSecuritygroupSync(t *testing.T) {
 					nas.IPRange{CIDRIP: &testCidrIP1, Status: &statusAuthorizing},
 				},
 			}},
-			last_sgs: &lastSGInputs,
+			last_sg: &lastSGInput,
 			last_ips: initLastIPs(),
 			exp_sgs: []nas.NASSecurityGroup{nas.NASSecurityGroup{
 				AvailabilityZone: &testZone,
@@ -135,7 +133,7 @@ func TestSecuritygroupSync(t *testing.T) {
 					nas.IPRange{CIDRIP: &testCidrIP1, Status: &statusAuthorized},
 				},
 			}},
-			last_sgs: &lastSGInputs,
+			last_sg: &lastSGInput,
 			last_ips: initLastIPs(),
 			exp_sgs: []nas.NASSecurityGroup{nas.NASSecurityGroup{
 				AvailabilityZone: &testZone,
@@ -155,7 +153,7 @@ func TestSecuritygroupSync(t *testing.T) {
 			pre_tsk: true,
 			pre_obj: initObjects(),
 			pre_sgs: []nas.NASSecurityGroup{initSecurityGroup()},
-			last_sgs: &lastSGInputs,
+			last_sg: &lastSGInput,
 			last_ips: initLastIPs(),
 			exp_sgs: []nas.NASSecurityGroup{initSecurityGroup()},
 			actions: []string{
@@ -172,7 +170,7 @@ func TestSecuritygroupSync(t *testing.T) {
 				newStorageClass("testStorageClass", testZone, "", ""),
 			},
 			pre_sgs: []nas.NASSecurityGroup{initSecurityGroup()},
-			last_sgs: &lastSGInputs,
+			last_sg: &lastSGInput,
 			last_ips: initLastIPs(),
 			exp_sgs: []nas.NASSecurityGroup{nas.NASSecurityGroup{
 				AvailabilityZone: &testZone,
@@ -196,7 +194,7 @@ func TestSecuritygroupSync(t *testing.T) {
 				newStorageClass("testStorageClass", testZone, "", ""),
 			},
 			pre_sgs: []nas.NASSecurityGroup{initSecurityGroup()},
-			last_sgs: &lastSGInputs,
+			last_sg: &lastSGInput,
 			last_ips: initLastIPs(),
 			exp_sgs: []nas.NASSecurityGroup{nas.NASSecurityGroup{
 				AvailabilityZone: &testZone,
@@ -227,7 +225,7 @@ func TestSecuritygroupSync(t *testing.T) {
 					nas.IPRange{CIDRIP: &testCidrIP3, Status: &statusRevoking},
 				},
 			}},
-			last_sgs: &lastSGInputs,
+			last_sg: &lastSGInput,
 			last_ips: initLastIPs(),
 			exp_sgs: []nas.NASSecurityGroup{nas.NASSecurityGroup{
 				AvailabilityZone: &testZone,
@@ -252,7 +250,7 @@ func TestSecuritygroupSync(t *testing.T) {
 	for name, c := range(cases) {
 		t.Logf("====== Test case [%s] :", name)
 
-		syncer, _, cloud := initTestSecuritygroupSyncer(t, c.pre_obj, c.last_sgs, c.last_ips, c.pre_tsk)
+		syncer, _, cloud := initTestSecuritygroupSyncer(t, c.pre_obj, c.last_sg, c.last_ips, c.pre_tsk)
 		cloud.NasSecurityGroups = c.pre_sgs
 		err := syncer.SyncNasSecurityGroups()
 		if c.errmsg == "" {
@@ -290,7 +288,7 @@ func TestSecuritygroupSync(t *testing.T) {
 func initTestSecuritygroupSyncer(
 	t *testing.T,
 	obj []runtime.Object,
-	securityGroups *map[string]nas.CreateNASSecurityGroupInput,
+	securityGroup *nas.CreateNASSecurityGroupInput,
 	privateIps *map[string]bool, hasTask bool) (*NSGSyncer, kubernetes.Interface, *FakeCloud) {
 
 	// test cloud
@@ -309,7 +307,7 @@ func initTestSecuritygroupSyncer(
 		cloudChkIntvl: 1, // seconds
 		hasTask: hasTask,
 		lastNodePrivateIps: privateIps,
-		lastSecurityGroupInputs: securityGroups,
+		lastSecurityGroupInput: securityGroup,
 	}, kubeClient, cloud
 }
 
@@ -352,6 +350,21 @@ func newStorageClass(name, zone, networkId, cidr string) *storagev1.StorageClass
 }
 
 // FakeCloud implementation
+
+func (c *FakeCloud) ChangeNasInstanceSecurityGroup(ctx context.Context, name, sgname string) (*nas.NASInstance, error) {
+	c.Actions = append(c.Actions, "ChangeNasInstanceSecurityGroup/" + name + "/" + sgname)
+	for i, n := range(c.NasInstances) {
+		if *n.NASInstanceIdentifier == name {
+			c.NasInstances[i].NASInstanceStatus = &statusModifying
+			c.NasInstances[i].NASSecurityGroups = []nas.NASSecurityGroup{
+				nas.NASSecurityGroup{NASSecurityGroupName: &sgname},
+			}
+			c.waitCnt = 2
+			return &c.NasInstances[i], nil
+		}
+	}
+	return nil, awserr.New("TestAwsErrorNotFound", "", fmt.Errorf("NASInstance %s not found", name))
+}
 
 func (c *FakeCloud) GetNasSecurityGroup(ctx context.Context, name string) (*nas.NASSecurityGroup, error) {
 	c.Actions = append(c.Actions, "GetNasSecurityGroup/" + name)
