@@ -37,8 +37,9 @@ type NSGSyncer struct {
 	internalChkIntvl int64
 	cloudChkIntvl int64
 	hasTask bool
+	restoreClusterId bool
 	lastNodePrivateIps *map[string]bool
-	lastSecurityGroupInputs *map[string]nas.CreateNASSecurityGroupInput
+	lastSecurityGroupInput *nas.CreateNASSecurityGroupInput
 }
 
 func newNSGSyncer(driver *NifcloudNasDriver) *NSGSyncer {
@@ -48,8 +49,9 @@ func newNSGSyncer(driver *NifcloudNasDriver) *NSGSyncer {
 		internalChkIntvl: 300, // seconds
 		cloudChkIntvl: 3600, // seconds
 		hasTask: true,
+		restoreClusterId: driver.config.RestoreClstId,
 		lastNodePrivateIps: nil,
-		lastSecurityGroupInputs: nil,
+		lastSecurityGroupInput: nil,
 	}
 }
 
@@ -119,24 +121,25 @@ func (s *NSGSyncer) SyncNasSecurityGroups() error {
 	if err != nil {
 		return fmt.Errorf("Error getting storage class: %s", err.Error())
 	}
-	securityGroupInputs := make(map[string]nas.CreateNASSecurityGroupInput, 0)
+	securityGroupInput := nas.CreateNASSecurityGroupInput{}
 	for _, class := range classes.Items {
 		if class.Provisioner == s.driver.config.Name {
 			zone := class.Parameters["zone"]
 			if securityGroupName != "" && zone != "" {
-				securityGroupInputs[securityGroupName] = nas.CreateNASSecurityGroupInput{
+				securityGroupInput = nas.CreateNASSecurityGroupInput{
 					AvailabilityZone: &zone,
 					NASSecurityGroupName: &securityGroupName,
 				}
+				break
 			}
 		}
 	}
-	glog.V(5).Infof("securityGroupInputs : %v", securityGroupInputs)
+	glog.V(5).Infof("securityGroupInput : %v", securityGroupInput)
 
 	// Internal check
-	if s.lastNodePrivateIps != nil && s.lastSecurityGroupInputs != nil {
+	if s.lastNodePrivateIps != nil && s.lastSecurityGroupInput != nil {
 		if reflect.DeepEqual(nodePrivateIps, *s.lastNodePrivateIps) &&
-		   reflect.DeepEqual(securityGroupInputs, *s.lastSecurityGroupInputs) {
+		   reflect.DeepEqual(securityGroupInput, *s.lastSecurityGroupInput) {
 			if !s.hasTask && !doCloudChk {
 				return nil
 			}
@@ -144,97 +147,149 @@ func (s *NSGSyncer) SyncNasSecurityGroups() error {
 			// Nodes or storage classes changed.
 			glog.V(4).Infof("SyncNasSecurityGroups nodes or storage classes changed")
 			s.lastNodePrivateIps = &nodePrivateIps
-			s.lastSecurityGroupInputs = &securityGroupInputs
+			s.lastSecurityGroupInput = &securityGroupInput
 			s.hasTask = true
 		}
 	} else {
 		// Nodes or storage classes changed.
 		s.lastNodePrivateIps = &nodePrivateIps
-		s.lastSecurityGroupInputs = &securityGroupInputs
+		s.lastSecurityGroupInput = &securityGroupInput
 		s.hasTask = true
 	}
 
 	glog.V(5).Infof("SyncNasSecurityGroups cloud check")
 
 	// Check cloud and synchronize
-	for _, scInput := range securityGroupInputs {
 
-		nsg, err := s.driver.config.Cloud.GetNasSecurityGroup(ctx, *scInput.NASSecurityGroupName)
+	// Check if the NAS Security Group exists and create one if not.
+	nsg, err := s.driver.config.Cloud.GetNasSecurityGroup(ctx, pstr(securityGroupInput.NASSecurityGroupName))
+	if err != nil {
+		if cloud.IsNotFoundErr(err) {
+			nsg, err = s.driver.config.Cloud.CreateNasSecurityGroup(ctx, &securityGroupInput)
+			if err != nil {
+				return fmt.Errorf("Error creating NASSecurityGroup: %s", err.Error())
+			}
+			glog.V(4).Infof("NAS SecurityGroup %s created", pstr(securityGroupInput.NASSecurityGroupName))
+		} else {
+			return fmt.Errorf("Error getting NASSecurityGroup: %s", err.Error())
+		}
+	}
 
-		// Check if the NAS Security Group exists and create one if not.
+	// Restore NASSecurityGroup name on starting if there are PVs from snapshot with the old cluster's NASSecurityGroup
+	if s.restoreClusterId {
+		// Try restoring only one time
+		s.restoreClusterId = false
+
+		// Get nas names from PVs
+		pvs, err := kubeClient.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{})
 		if err != nil {
-			if cloud.IsNotFoundErr(err) {
-				nsg, err = s.driver.config.Cloud.CreateNasSecurityGroup(ctx, &scInput)
-				if err != nil {
-					return fmt.Errorf("Error creating NASSecurityGroup: %s", err.Error())
-				}
-				glog.V(4).Infof("NAS SecurityGroup %s created", *scInput.NASSecurityGroupName)
-			} else {
-				return fmt.Errorf("Error getting NASSecurityGroup: %s", err.Error())
+			return fmt.Errorf("Error PV list: %s", err.Error())
+		}
+		volumeHandles := []string{}
+		for _, pv := range pvs.Items {
+			if pv.Spec.CSI != nil && pv.Spec.CSI.Driver == s.driver.config.Name {
+				volumeHandles = append(volumeHandles, pv.Spec.CSI.VolumeHandle)
 			}
 		}
 
-		// Check security group is editable
-		editable := true
+		// Check and repair NASSecurityGroup Name
+		cnt := 0
+		for _, volumeID := range volumeHandles {
+			nas, err := s.driver.config.Cloud.GetNasInstanceFromVolumeId(ctx, volumeID)
+			if err != nil {
+				return fmt.Errorf("Error getting NASInstance %s : %s", volumeID, err.Error())
+			}
+			if len(nas.NASSecurityGroups) == 0 {
+				return fmt.Errorf("Error getting no NASSecurityGroups in NASInstance %s", volumeID)
+			}
+			if pstr(nas.NASSecurityGroups[0].NASSecurityGroupName) == securityGroupName {
+				glog.V(4).Infof("Found NAS %s in the cluster's NASSecurityGroup", volumeID)
+				cnt++
+			} else {
+				glog.V(4).Infof("Found NAS %s in the other cluster's NASSecurityGroup %s ... Repairing",
+					volumeID, pstr(nas.NASSecurityGroups[0].NASSecurityGroupName))
+				// Repair
+				_, err := s.driver.config.Cloud.ChangeNasInstanceSecurityGroup(
+					ctx,
+					pstr(nas.NASInstanceIdentifier),
+					securityGroupName,
+				)
+				if err != nil {
+					return fmt.Errorf("Error setting NASSecurityGroup %s to %s : %s",
+						pstr(nas.NASInstanceIdentifier),
+						securityGroupName,
+						err.Error(),
+					)
+				}
+			}
+		}
+	}
+
+	// Check security group is editable
+	editable := true
+	for _, aip := range nsg.IPRanges {
+		if *aip.Status != "authorized" {
+			editable = false
+			break
+		}
+	}
+
+	// Authorize node private ip if not.
+	for ip, _ := range nodePrivateIps {
+		authorized := false
+		iprange := ip + "/32"
 		for _, aip := range nsg.IPRanges {
-			if *aip.Status != "authorized" {
-				editable = false
+			if *aip.CIDRIP == iprange {
+				authorized = true
 				break
 			}
 		}
-
-		// Authorize node private ip if not.
-		for ip, _ := range nodePrivateIps {
-			authorized := false
-			iprange := ip + "/32"
-			for _, aip := range nsg.IPRanges {
-				if *aip.CIDRIP == iprange {
-					authorized = true
-					break
-				}
-			}
-			if !authorized {
-				s.hasTask = true
-				if !editable {
-					// Not recovered from Client.Resource.IncorrectState.ApplyNASSecurityGroup
-					glog.V(4).Infof("Pending authorize CIDRIP %s : SecurityGroup %s not in editable state", iprange, *scInput.NASSecurityGroupName)
-					return nil
-				}
-				_, err = s.driver.config.Cloud.AuthorizeCIDRIP(ctx, *scInput.NASSecurityGroupName, iprange)
-				if err != nil {
-					return fmt.Errorf("Error authorizing NASSecurityGroup ingress: %s", err.Error())
-				}
-				glog.V(4).Infof("CIDRIP %s authorized in SecurityGroup %s", iprange, *scInput.NASSecurityGroupName)
-				// Do one task only to wait recovery of Client.Resource.IncorrectState.ApplyNASSecurityGroup.
+		if !authorized {
+			s.hasTask = true
+			if !editable {
+				// Not recovered from Client.Resource.IncorrectState.ApplyNASSecurityGroup
+				glog.V(4).Infof("Pending authorize CIDRIP %s : SecurityGroup %s not in editable state",
+					iprange, pstr(securityGroupInput.NASSecurityGroupName))
 				return nil
+			}
+			_, err = s.driver.config.Cloud.AuthorizeCIDRIP(ctx, pstr(securityGroupInput.NASSecurityGroupName), iprange)
+			if err != nil {
+				return fmt.Errorf("Error authorizing NASSecurityGroup ingress: %s", err.Error())
+			}
+			glog.V(4).Infof("CIDRIP %s authorized in SecurityGroup %s", iprange, pstr(securityGroupInput.NASSecurityGroupName))
+			// Do one task only to wait recovery of Client.Resource.IncorrectState.ApplyNASSecurityGroup.
+			return nil
+		}
+	}
+
+	// Revoke CIDRIPs not in node private IPs.
+	for _, aip := range nsg.IPRanges {
+		nodeExists := false
+		for ip, _ := range nodePrivateIps {
+			iprange := ip + "/32"
+			if *aip.CIDRIP == iprange {
+				nodeExists = true
+				break
 			}
 		}
-
-		// Revoke CIDRIPs not in node private IPs.
-		for _, aip := range nsg.IPRanges {
-			nodeExists := false
-			for ip, _ := range nodePrivateIps {
-				iprange := ip + "/32"
-				if *aip.CIDRIP == iprange {
-					nodeExists = true
-					break
-				}
-			}
-			if !nodeExists {
-				s.hasTask = true
-				if !editable {
-					// Not recovered from Client.Resource.IncorrectState.ApplyNASSecurityGroup
-					glog.V(4).Infof("Pending revoke CIDRIP %s : SecurityGroup %s not in editable state", *aip.CIDRIP, *scInput.NASSecurityGroupName)
-					return nil
-				}
-				_, err = s.driver.config.Cloud.RevokeCIDRIP(ctx, *scInput.NASSecurityGroupName, *aip.CIDRIP)
-				if err != nil {
-					return fmt.Errorf("Error revoking NASSecurityGroup ingress: %s", err.Error())
-				}
-				glog.V(4).Infof("CIDRIP %s revoked in SecurityGroup %s", *aip.CIDRIP, *scInput.NASSecurityGroupName)
-				// Do one task only to wait recovery of Client.Resource.IncorrectState.ApplyNASSecurityGroup.
+		if !nodeExists {
+			s.hasTask = true
+			if !editable {
+				// Not recovered from Client.Resource.IncorrectState.ApplyNASSecurityGroup
+				glog.V(4).Infof("Pending revoke CIDRIP %s : SecurityGroup %s not in editable state",
+					pstr(aip.CIDRIP), pstr(securityGroupInput.NASSecurityGroupName))
 				return nil
 			}
+			_, err = s.driver.config.Cloud.RevokeCIDRIP(
+				ctx, pstr(securityGroupInput.NASSecurityGroupName), pstr(aip.CIDRIP))
+			if err != nil {
+				return fmt.Errorf("Error revoking NASSecurityGroup ingress: %s", err.Error())
+			}
+			glog.V(4).Infof("CIDRIP %s revoked in SecurityGroup %s",
+				pstr(aip.CIDRIP), pstr(securityGroupInput.NASSecurityGroupName))
+
+			// Do one task only to wait recovery of Client.Resource.IncorrectState.ApplyNASSecurityGroup.
+			return nil
 		}
 	}
 

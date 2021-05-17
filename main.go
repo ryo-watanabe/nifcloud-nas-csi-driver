@@ -40,6 +40,7 @@ var (
 	runNode       = flag.Bool("node", false, "run node service")
 	privateIpReg  = flag.Bool("privateipreg", false, "get private ip from network interface")
 	configurator  = flag.Bool("configurator", true, "run configurator")
+	restoreClstId = flag.Bool("restoreclstid", true, "restore NASSecurityGroup name on starting of controller")
 	devcloudep    = flag.String("devcloudep", "", "dev cloud endpoint")
 
 	version = "v0.5.0a"
@@ -98,6 +99,7 @@ func main() {
 		SnapClient:    snapClient,
 		PrivateIpReg:  *privateIpReg,
 		Configurator:  *configurator,
+		RestoreClstId: *restoreClstId,
 	}
 
 	nfnsDriver, err := driver.NewNifcloudNasDriver(config)
