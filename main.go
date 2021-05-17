@@ -40,8 +40,9 @@ var (
 	runNode       = flag.Bool("node", false, "run node service")
 	privateIpReg  = flag.Bool("privateipreg", false, "get private ip from network interface")
 	configurator  = flag.Bool("configurator", true, "run configurator")
+	devcloudep    = flag.String("devcloudep", "", "dev cloud endpoint")
 
-	version = "v0.0.1"
+	version = "v0.5.0a"
 	revision = "undef"
 )
 
@@ -78,7 +79,7 @@ func main() {
 
 	var provider cloud.Interface
 	if *runController {
-		provider, err = cloud.NewCloud(*region)
+		provider, err = cloud.NewCloud(*region, *devcloudep)
 		if err != nil {
 			glog.Fatalf("Failed to initialize cloud provider: %v", err)
 		}

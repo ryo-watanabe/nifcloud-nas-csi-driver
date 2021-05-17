@@ -2,6 +2,7 @@ package cloud
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 
@@ -45,9 +46,10 @@ type Cloud struct {
 	Hatoba    *hatoba.Client
 	Rdb       *rdb.Client
 	Region    string
+	DevEp     string
 }
 
-func NewCloud(region string) (*Cloud, error) {
+func NewCloud(region, devcloudep string) (*Cloud, error) {
 
 	// Get credentials
 	accesskey := os.Getenv("AWS_ACCESS_KEY_ID")
@@ -69,6 +71,7 @@ func NewCloud(region string) (*Cloud, error) {
 		Hatoba:    hatoba.New(cfg),
 		Rdb:       rdb.New(cfg),
 		Region:    region,
+		DevEp:     devcloudep,
 	}, nil
 }
 
@@ -218,6 +221,16 @@ func (c *Cloud) RevokeCIDRIP(ctx context.Context, name, cidrip string) (*nas.NAS
 func (c *Cloud) ListClusters(ctx context.Context) ([]hatoba.Cluster, error) {
 	// Call list clusters
 	req := c.Hatoba.ListClustersRequest(&hatoba.ListClustersInput{})
+
+	// Set dev cloud endpoint
+	if c.DevEp != "" {
+		u, err := url.Parse(c.DevEp)
+		if err != nil {
+			return nil, err
+		}
+		req.Request.HTTPRequest.URL.Host = u.Host
+		req.Request.HTTPRequest.URL.Scheme = u.Scheme
+	}
 	output, err := req.Send(ctx)
 	if err != nil {
 		return nil, err
