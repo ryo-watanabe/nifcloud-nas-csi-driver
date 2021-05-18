@@ -121,12 +121,12 @@ func (s *NSGSyncer) SyncNasSecurityGroups() error {
 	if err != nil {
 		return fmt.Errorf("Error getting storage class: %s", err.Error())
 	}
-	securityGroupInput := nas.CreateNASSecurityGroupInput{}
+	var securityGroupInput *nas.CreateNASSecurityGroupInput
 	for _, class := range classes.Items {
 		if class.Provisioner == s.driver.config.Name {
 			zone := class.Parameters["zone"]
 			if securityGroupName != "" && zone != "" {
-				securityGroupInput = nas.CreateNASSecurityGroupInput{
+				securityGroupInput = &nas.CreateNASSecurityGroupInput{
 					AvailabilityZone: &zone,
 					NASSecurityGroupName: &securityGroupName,
 				}
@@ -134,12 +134,16 @@ func (s *NSGSyncer) SyncNasSecurityGroups() error {
 			}
 		}
 	}
+
+	if securityGroupInput == nil {
+		return fmt.Errorf("valid zone or driver name %s not found in StorageClass", s.driver.config.Name)
+	}
 	glog.V(5).Infof("securityGroupInput : %v", securityGroupInput)
 
 	// Internal check
 	if s.lastNodePrivateIps != nil && s.lastSecurityGroupInput != nil {
 		if reflect.DeepEqual(nodePrivateIps, *s.lastNodePrivateIps) &&
-		   reflect.DeepEqual(securityGroupInput, *s.lastSecurityGroupInput) {
+		   reflect.DeepEqual(*securityGroupInput, *s.lastSecurityGroupInput) {
 			if !s.hasTask && !doCloudChk {
 				return nil
 			}
@@ -147,13 +151,13 @@ func (s *NSGSyncer) SyncNasSecurityGroups() error {
 			// Nodes or storage classes changed.
 			glog.V(4).Infof("SyncNasSecurityGroups nodes or storage classes changed")
 			s.lastNodePrivateIps = &nodePrivateIps
-			s.lastSecurityGroupInput = &securityGroupInput
+			s.lastSecurityGroupInput = securityGroupInput
 			s.hasTask = true
 		}
 	} else {
 		// Nodes or storage classes changed.
 		s.lastNodePrivateIps = &nodePrivateIps
-		s.lastSecurityGroupInput = &securityGroupInput
+		s.lastSecurityGroupInput = securityGroupInput
 		s.hasTask = true
 	}
 
@@ -165,7 +169,7 @@ func (s *NSGSyncer) SyncNasSecurityGroups() error {
 	nsg, err := s.driver.config.Cloud.GetNasSecurityGroup(ctx, pstr(securityGroupInput.NASSecurityGroupName))
 	if err != nil {
 		if cloud.IsNotFoundErr(err) {
-			nsg, err = s.driver.config.Cloud.CreateNasSecurityGroup(ctx, &securityGroupInput)
+			nsg, err = s.driver.config.Cloud.CreateNasSecurityGroup(ctx, securityGroupInput)
 			if err != nil {
 				return fmt.Errorf("Error creating NASSecurityGroup: %s", err.Error())
 			}

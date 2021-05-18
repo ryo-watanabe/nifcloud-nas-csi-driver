@@ -717,6 +717,7 @@ func newPV(name, volumeHandle, storage string) *corev1.PersistentVolume {
 			PersistentVolumeSource: corev1.PersistentVolumeSource{
 				CSI: &corev1.CSIPersistentVolumeSource{
 					VolumeHandle: volumeHandle,
+					Driver: "testDriverName",
 				},
 			},
 			Capacity: corev1.ResourceList{"storage":q},

@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/net/context"
 	"github.com/aws/aws-sdk-go-v2/aws/awserr"
@@ -282,6 +283,74 @@ func TestSecuritygroupSync(t *testing.T) {
 				t.Errorf("error message not matched in case [%s]\nmust contains : %s\nbut got : %s", name, c.errmsg, err.Error())
 			}
 		}
+	}
+}
+
+func TestRunInitSecuritygroupSync(t *testing.T) {
+	// log
+	flag.Set("logtostderr", "true")
+	flag.Lookup("v").Value.Set("5")
+	flag.Parse()
+
+	// test k8s
+	kubeobjects := []runtime.Object{
+		newPVC("testpvc", "100Gi", "TESTPVCUID"),
+		newPV("pvc-TESTPVCUID", "testregion/pvc-TESTPVCUID", "100Gi"),
+		newCSINode("testNodeID1", "192.168.0.1"),
+		newNamespace("kube-system", "TESTCLUSTERUID2"),
+		newStorageClass("testStorageClass", testZone, "", ""),
+	}
+	kubeClient := k8sfake.NewSimpleClientset(kubeobjects...)
+
+	// test cloud
+	cloud := newFakeCloud()
+	cloud.NasInstances = []nas.NASInstance{
+		initNASInstance("pvc-TESTPVCUID", "192.168.100.0", 100),
+	}
+
+	config := &NifcloudNasDriverConfig{
+		Name:          "testDriverName",
+		Version:       "testDriverVersion",
+		NodeID:        "testNodeID",
+		RunController: true,
+		RunNode:       false,
+		KubeClient:    kubeClient,
+		Cloud:         cloud,
+		InitBackoff:   1,
+		RestoreClstId: true,
+	}
+
+	driver, _ := NewNifcloudNasDriver(config)
+	go func(){
+		driver.Run("unix:/tmp/csi.sock")
+	}()
+	time.Sleep(time.Duration(2) * time.Second)
+	driver.Stop()
+
+	// check cloud actions
+	exp_actions := []string{
+		"GetNasSecurityGroup/cluster-TESTCLUSTERUID2",
+		"CreateNasSecurityGroup/cluster-TESTCLUSTERUID2",
+		"GetNasInstanceFromVolumeId/testregion/pvc-TESTPVCUID",
+		"GetNasInstance/pvc-TESTPVCUID",
+		"ChangeNasInstanceSecurityGroup/pvc-TESTPVCUID/cluster-TESTCLUSTERUID2",
+		"AuthorizeCIDRIP/cluster-TESTCLUSTERUID2/192.168.0.1/32",
+	}
+	if !reflect.DeepEqual(exp_actions, cloud.Actions) {
+		t.Errorf("cloud action not matched\nexpected : %v\nbut got  : %v", exp_actions, cloud.Actions)
+	}
+
+	// check nas security group name
+	exp := initNASInstance("pvc-TESTPVCUID", "192.168.100.0", 100)
+	sgname, _ := getSecurityGroupName(context.TODO(), driver)
+	exp.NASSecurityGroups[0].NASSecurityGroupName = &sgname
+	exp.NASInstanceStatus = &statusModifying
+	got, err := cloud.GetNasInstance(context.TODO(), "pvc-TESTPVCUID")
+	if err != nil {
+		t.Errorf("error getting nas instance : %s", err.Error())
+	}
+	if !reflect.DeepEqual(exp, *got) {
+		t.Errorf("NASInstance not matched\nexpected : %v\nbut got  : %v", exp, got)
 	}
 }
 
