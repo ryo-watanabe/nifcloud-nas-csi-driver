@@ -47,6 +47,7 @@ type NifcloudNasDriverConfig struct {
 	InitBackoff   time.Duration
 	PrivateIpReg  bool
 	Configurator  bool
+	RestoreClstId bool
 }
 
 type NifcloudNasDriver struct {

@@ -22,6 +22,7 @@ type Interface interface {
 	ListNasInstances(ctx context.Context) ([]nas.NASInstance, error)
 	CreateNasInstance(ctx context.Context, n *nas.CreateNASInstanceInput) (*nas.NASInstance, error)
 	ModifyNasInstance(ctx context.Context, name string) (*nas.NASInstance, error)
+	ChangeNasInstanceSecurityGroup(ctx context.Context, name, sgname string) (*nas.NASInstance, error)
 	DeleteNasInstance(ctx context.Context, name string) error
 	GenerateVolumeIdFromNasInstance(obj *nas.NASInstance) string
 	GetNasInstanceFromVolumeId(ctx context.Context, id string) (*nas.NASInstance, error)
@@ -124,6 +125,20 @@ func (c *Cloud) ModifyNasInstance(ctx context.Context, name string) (*nas.NASIns
 	no_root_squash := "true"
 	req := c.Nas.ModifyNASInstanceRequest(
 		&nas.ModifyNASInstanceInput{NASInstanceIdentifier: &name, NoRootSquash: &no_root_squash},
+	)
+
+	output, err := req.Send(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return output.NASInstance, nil
+}
+
+func (c *Cloud) ChangeNasInstanceSecurityGroup(ctx context.Context, name, sgname string) (*nas.NASInstance, error) {
+	// Call modify NAS Instance to set NasSecurityGroups
+	sgs := []string{sgname}
+	req := c.Nas.ModifyNASInstanceRequest(
+		&nas.ModifyNASInstanceInput{NASInstanceIdentifier: &name, NASSecurityGroups: sgs},
 	)
 
 	output, err := req.Send(ctx)

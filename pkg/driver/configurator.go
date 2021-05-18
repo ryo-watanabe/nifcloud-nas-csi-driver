@@ -393,10 +393,10 @@ func (c *Configurator) getStorageClasses() (bool, error) {
 			// Do not read cidr from storageclasses
 		}
 	}
-	glog.V(4).Infof("Configurator : zone=%s networkID=%s", c.zone, c.networkId)
+	glog.V(5).Infof("Configurator : zone=%s networkID=%s", c.zone, c.networkId)
 	if c.zone == "" || c.networkId == "" {
 		mustUpdate = true
-		glog.V(5).Infof("Configurator : storage classes must be updated")
+		glog.V(4).Infof("Configurator : storage classes must be updated")
 	}
 
 	return mustUpdate, nil
