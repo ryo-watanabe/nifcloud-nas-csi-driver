@@ -11,9 +11,13 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws/awserr"
 	"github.com/nifcloud/nifcloud-sdk-go/nifcloud"
 	"github.com/nifcloud/nifcloud-sdk-go/service/computing"
+	"github.com/nifcloud/nifcloud-sdk-go/service/computing/computingiface"
 	"github.com/nifcloud/nifcloud-sdk-go/service/nas"
+	"github.com/nifcloud/nifcloud-sdk-go/service/nas/nasiface"
 	"github.com/nifcloud/nifcloud-sdk-go/service/hatoba"
+	"github.com/nifcloud/nifcloud-sdk-go/service/hatoba/hatobaiface"
 	"github.com/nifcloud/nifcloud-sdk-go/service/rdb"
+	"github.com/nifcloud/nifcloud-sdk-go/service/rdb/rdbiface"
 )
 
 type Interface interface {
@@ -42,10 +46,10 @@ type Interface interface {
 
 type Cloud struct {
 	//Session *session.Session
-	Nas       *nas.Client
-	Computing *computing.Client
-	Hatoba    *hatoba.Client
-	Rdb       *rdb.Client
+	Nas       nasiface.ClientAPI
+	Computing computingiface.ClientAPI
+	Hatoba    hatobaiface.ClientAPI
+	Rdb       rdbiface.ClientAPI
 	Region    string
 	DevEp     string
 }
