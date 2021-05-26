@@ -1,0 +1,24 @@
+run:
+  concurrency: 4
+
+linters:
+  disable-all: true
+  enable:
+    - deadcode
+    - errcheck
+    - goimports
+    - golint
+    - gosec
+    - gosimple
+    - govet
+    - lll
+    - misspell
+    - staticcheck
+    - structcheck
+    - typecheck
+    - unused
+    - varcheck
+    - prealloc
+
+issues:
+  exclude-use-default: false
