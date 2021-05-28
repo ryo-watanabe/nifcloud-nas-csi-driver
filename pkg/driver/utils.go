@@ -4,11 +4,13 @@ import (
 	"fmt"
 	"net"
 	"sync"
+
 	"github.com/golang/glog"
 )
 
 // Instance name holder
 
+// InstanceNameHolder prohibits parallel operations of an instance
 type InstanceNameHolder struct {
 	creatingInstanceNames map[string]bool
 	creatingInstanceMutex sync.Mutex
@@ -16,11 +18,12 @@ type InstanceNameHolder struct {
 
 func newInstanceNameHolder() *InstanceNameHolder {
 	names := make(map[string]bool)
-	return &InstanceNameHolder {
+	return &InstanceNameHolder{
 		creatingInstanceNames: names,
 	}
 }
 
+// SetCreating set an instance in the list
 func (c *InstanceNameHolder) SetCreating(name string) error {
 	c.creatingInstanceMutex.Lock()
 	defer c.creatingInstanceMutex.Unlock()
@@ -31,11 +34,13 @@ func (c *InstanceNameHolder) SetCreating(name string) error {
 	return nil
 }
 
+// IsCreating returns wheather there's a creating instance with the name
 func (c *InstanceNameHolder) IsCreating(name string) bool {
 	_, ok := c.creatingInstanceNames[name]
 	return ok
 }
 
+// UnsetCreating unsets an instance from the list
 func (c *InstanceNameHolder) UnsetCreating(name string) {
 	c.creatingInstanceMutex.Lock()
 	defer c.creatingInstanceMutex.Unlock()
@@ -46,12 +51,12 @@ func (c *InstanceNameHolder) UnsetCreating(name string) {
 
 const (
 	byteMax = 255
-	ipV4Bits = 32
 )
 
-// IPAllocator struct consists of shared resources that are used to keep track of the /29 IPRanges currently reserved by service instances
+// IPAllocator struct consists of shared resources that are used
+// to keep track of the /29 IPRanges currently reserved by service instances
 type IPAllocator struct {
-	pendingIPs map[string]bool
+	pendingIPs      map[string]bool
 	pendingIPsMutex sync.Mutex
 }
 
@@ -79,14 +84,16 @@ func (ipAllocator *IPAllocator) ReleaseIP(ip string) {
 }
 
 // GetUnreservedIP returns an unreserved IP.
-func (ipAllocator *IPAllocator) GetUnreservedIP(cidr string, cloudInstancesReservedIPs map[string]bool) (string, error) {
+func (ipAllocator *IPAllocator) GetUnreservedIP(
+	cidr string, cloudInstancesReservedIPs map[string]bool) (string, error) {
 	ip, ipnet, err := net.ParseCIDR(cidr)
 	if err != nil {
 		return "", err
 	}
 	var reservedIPs = make(map[string]bool)
 
-	// The final reserved list is obtained by combining the cloudInstancesReservedIPRanges list and the pendingIPRanges list in the ipAllocator
+	// The final reserved list is obtained
+	// by combining the cloudInstancesReservedIPRanges list and the pendingIPRanges list in the ipAllocator
 	for cloudInstancesReservedIP := range cloudInstancesReservedIPs {
 		reservedIPs[cloudInstancesReservedIP] = true
 	}
@@ -98,7 +105,7 @@ func (ipAllocator *IPAllocator) GetUnreservedIP(cidr string, cloudInstancesReser
 		reservedIPs[reservedIP] = true
 	}
 
-	for targetIP := cloneIP(ip.Mask(ipnet.Mask)); ipnet.Contains(targetIP) && err == nil; targetIP, err = incrementIP(targetIP, 1) {
+	for targetIP := cloneIP(ip.Mask(ipnet.Mask)); ipnet.Contains(targetIP) && err == nil; targetIP, err = incrementIP(targetIP, 1) { //nolint:lll
 		used := false
 		for reservedIP := range reservedIPs {
 			if targetIP.Equal(net.ParseIP(reservedIP)) {
@@ -150,20 +157,22 @@ func cloneIP(ip net.IP) net.IP {
 
 // resource_queue
 
+// OperateResourceQueue provides a queue for creating/deleting resources
 type OperateResourceQueue struct {
-	name string
-	resources map[string]bool
+	name       string
+	resources  map[string]bool
 	queueMutex sync.Mutex
 }
 
 func newOperateResourceQueue(name string) *OperateResourceQueue {
 	rs := make(map[string]bool)
-	return &OperateResourceQueue {
-		name: name,
+	return &OperateResourceQueue{
+		name:      name,
 		resources: rs,
 	}
 }
 
+// Queue pushes a resource to the queue
 func (q *OperateResourceQueue) Queue(name string) error {
 	if _, ok := q.resources[name]; ok {
 		return fmt.Errorf("Duplicate Queue called for %s in %s", name, q.name)
@@ -174,6 +183,7 @@ func (q *OperateResourceQueue) Queue(name string) error {
 	return nil
 }
 
+// Show prints the queue
 func (q *OperateResourceQueue) Show() {
 	if len(q.resources) == 0 {
 		glog.V(4).Infof("No resources Operating/Pending in %s", q.name)
@@ -187,6 +197,7 @@ func (q *OperateResourceQueue) Show() {
 	}
 }
 
+// UnsetQueue pops a resource from the queue
 func (q *OperateResourceQueue) UnsetQueue(name string) {
 	operating, ok := q.resources[name]
 	if !ok || !operating {

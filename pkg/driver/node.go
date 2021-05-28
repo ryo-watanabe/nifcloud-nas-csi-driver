@@ -35,23 +35,19 @@ import (
 	"k8s.io/utils/mount"
 )
 
-const (
-	optionSmbUser     = "smbUser"
-	optionSmbPassword = "smbPassword"
-)
-
 var (
 	// For testing purposes
 	goOs = runtime.GOOS
 )
 
-func registerNodePrivateIp(config *NifcloudNasDriverConfig) error {
+func registerNodePrivateIP(config *NifcloudNasDriverConfig) error {
 	// Get private IP (if:ens192)
-	privateIp, err := exec.Command("sh", "-c", "ip -4 a show "+config.PrivateIfName+" | grep inet | tr -s ' ' | cut -d' ' -f3").Output()
+	cmd := "ip -4 a show " + config.PrivateIfName + " | grep inet | tr -s ' ' | cut -d' ' -f3"
+	privateIP, err := exec.Command("sh", "-c", cmd).Output() //nolint:gosec
 	if err != nil {
 		return err
 	}
-	glog.Infof("Node private IP : %s", privateIp)
+	glog.Infof("Node private IP : %s", privateIP)
 
 	// Annotate private ip in csinode resource
 	ctx := context.TODO()
@@ -62,11 +58,11 @@ func registerNodePrivateIp(config *NifcloudNasDriverConfig) error {
 	glog.Infof("CSINode spec : %v", csiNode.Spec)
 	annotations := csiNode.ObjectMeta.GetAnnotations()
 	if annotations == nil {
-		annotations = make(map[string]string, 0)
+		annotations = make(map[string]string)
 	}
-	annotations[config.Name+"/privateIp"] = strings.Split(string(privateIp), "/")[0]
+	annotations[config.Name+"/privateIp"] = strings.Split(string(privateIP), "/")[0]
 	csiNode.ObjectMeta.SetAnnotations(annotations)
-	csiNode, err = config.KubeClient.StorageV1().CSINodes().Update(ctx, csiNode, metav1.UpdateOptions{})
+	_, err = config.KubeClient.StorageV1().CSINodes().Update(ctx, csiNode, metav1.UpdateOptions{})
 	if err != nil {
 		return err
 	}
@@ -88,7 +84,8 @@ func newNodeServer(driver *NifcloudNasDriver, mounter mount.Interface) csi.NodeS
 }
 
 // NodePublishVolume mounts the GCFS volume
-func (s *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublishVolumeRequest) (*csi.NodePublishVolumeResponse, error) {
+func (s *nodeServer) NodePublishVolume(ctx context.Context,
+	req *csi.NodePublishVolumeRequest) (*csi.NodePublishVolumeResponse, error) {
 	// TODO: make this idempotent. Multiple requests for the same volume can come in parallel, this needs to be seralized
 	// We need something like the nestedpendingoperations
 
@@ -118,7 +115,7 @@ func (s *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublish
 		// On Windows the mount target must not exist
 		if goOs != "windows" {
 			// Make target path
-			err = os.MkdirAll(targetPath, 0755)
+			err = os.MkdirAll(targetPath, 0755) //nolint:gosec
 			if err != nil {
 				return nil, fmt.Errorf("Error making target path %s: %s", targetPath, err.Error())
 			}
@@ -132,7 +129,7 @@ func (s *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublish
 	}
 
 	// Mount source
-	source := fmt.Sprintf("%s:/%s", attr[attrIp], attr[attrSourcePath])
+	source := fmt.Sprintf("%s:/%s", attr[attrIP], attr[attrSourcePath])
 
 	// FileSystem type
 	fstype := "nfs"
@@ -142,7 +139,7 @@ func (s *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublish
 
 	/*// Windows specific values
 	if goOs == "windows" {
-		source = fmt.Sprintf("\\\\%s\\%s", attr[attrIp], attr[attrVolume])
+		source = fmt.Sprintf("\\\\%s\\%s", attr[attrIP], attr[attrVolume])
 		fstype = "cifs"
 
 		// Login credentials
@@ -177,7 +174,8 @@ func (s *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublish
 }
 
 // NodeUnpublishVolume unmounts the GCFS volume
-func (s *nodeServer) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpublishVolumeRequest) (*csi.NodeUnpublishVolumeResponse, error) {
+func (s *nodeServer) NodeUnpublishVolume(ctx context.Context,
+	req *csi.NodeUnpublishVolumeRequest) (*csi.NodeUnpublishVolumeResponse, error) {
 	// TODO: make this idempotent
 
 	// Validate arguments
@@ -193,14 +191,16 @@ func (s *nodeServer) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpub
 	return &csi.NodeUnpublishVolumeResponse{}, nil
 }
 
-func (s *nodeServer) NodeGetInfo(ctx context.Context, req *csi.NodeGetInfoRequest) (*csi.NodeGetInfoResponse, error) {
+func (s *nodeServer) NodeGetInfo(ctx context.Context,
+	req *csi.NodeGetInfoRequest) (*csi.NodeGetInfoResponse, error) {
 	return &csi.NodeGetInfoResponse{
 		NodeId:            s.driver.config.NodeID,
 		MaxVolumesPerNode: 128,
 	}, nil
 }
 
-func (s *nodeServer) NodeGetCapabilities(ctx context.Context, req *csi.NodeGetCapabilitiesRequest) (*csi.NodeGetCapabilitiesResponse, error) {
+func (s *nodeServer) NodeGetCapabilities(ctx context.Context,
+	req *csi.NodeGetCapabilitiesRequest) (*csi.NodeGetCapabilitiesResponse, error) {
 	return &csi.NodeGetCapabilitiesResponse{
 		Capabilities: s.driver.nscap,
 	}, nil
@@ -209,8 +209,8 @@ func (s *nodeServer) NodeGetCapabilities(ctx context.Context, req *csi.NodeGetCa
 // validateVolumeAttributes checks for all the necessary fields for mounting the volume
 func validateVolumeAttributes(attr map[string]string) error {
 	// TODO: validate ip syntax
-	if attr[attrIp] == "" {
-		return fmt.Errorf("volume attribute %v not set", attrIp)
+	if attr[attrIP] == "" {
+		return fmt.Errorf("volume attribute %v not set", attrIP)
 	}
 	// TODO: validate allowed characters
 	if _, ok := attr[attrSourcePath]; !ok {
@@ -299,7 +299,8 @@ func getVolumeStats(volumePath string) (*volumeStats, error) {
 	return volStats, nil
 }
 
-func (s *nodeServer) NodeGetVolumeStats(ctx context.Context, req *csi.NodeGetVolumeStatsRequest) (*csi.NodeGetVolumeStatsResponse, error) {
+func (s *nodeServer) NodeGetVolumeStats(ctx context.Context,
+	req *csi.NodeGetVolumeStatsRequest) (*csi.NodeGetVolumeStatsResponse, error) {
 
 	volumePath := req.GetVolumePath()
 	if volumePath == "" {
@@ -334,14 +335,17 @@ func (s *nodeServer) NodeGetVolumeStats(ctx context.Context, req *csi.NodeGetVol
 
 //// Unimplemented funcs
 
-func (s *nodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
+func (s *nodeServer) NodeStageVolume(
+	ctx context.Context, req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "NodeStageVolume unsupported")
 }
 
-func (s *nodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstageVolumeRequest) (*csi.NodeUnstageVolumeResponse, error) {
+func (s *nodeServer) NodeUnstageVolume(
+	ctx context.Context, req *csi.NodeUnstageVolumeRequest) (*csi.NodeUnstageVolumeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "NodeUnStageVolume unsupported")
 }
 
-func (s *nodeServer) NodeExpandVolume(ctx context.Context, req *csi.NodeExpandVolumeRequest) (*csi.NodeExpandVolumeResponse, error) {
+func (s *nodeServer) NodeExpandVolume(
+	ctx context.Context, req *csi.NodeExpandVolumeRequest) (*csi.NodeExpandVolumeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "NodeExpandVolume unsupported")
 }

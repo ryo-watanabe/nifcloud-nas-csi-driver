@@ -1,4 +1,3 @@
-
 /*
 Copyright 2018 The Kubernetes Authors.
 
@@ -18,23 +17,23 @@ limitations under the License.
 package driver
 
 import (
+	"bufio"
 	"fmt"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"bufio"
 	"time"
 
 	"github.com/cenkalti/backoff"
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/golang/glog"
 	"golang.org/x/net/context"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/util/rand"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/client-go/kubernetes"
 	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/rand"
+	"k8s.io/client-go/kubernetes"
 
 	"github.com/ryo-watanabe/nifcloud-nas-csi-driver/pkg/util"
 )
@@ -44,7 +43,7 @@ func (s *controllerServer) convertSharedRequest(
 	ctx context.Context,
 	name string,
 	req *csi.CreateVolumeRequest,
-	) (string, int64, error) {
+) (string, int64, error) {
 
 	if req.GetParameters()["shared"] != "true" {
 		return name, getRequestCapacity(req.GetCapacityRange(), minVolumeSize), nil
@@ -66,7 +65,7 @@ func (s *controllerServer) convertSharedRequest(
 
 	// TODO: must be check with sum of all shared PVs capacities
 	if capBytes > sharedCapBytes {
-		return "", 0, fmt.Errorf("Request capacity %d is too big to share a NAS instance.", capBytes)
+		return "", 0, fmt.Errorf("Request capacity %d is too big to share a NAS instance", capBytes)
 	}
 
 	// Get kube-system UID for cluster ID
@@ -77,7 +76,7 @@ func (s *controllerServer) convertSharedRequest(
 
 	// Search which NAS Instance the volume to settle in.
 	sharedName := ""
-	sharedNamePrefix := "cluster-" + clusterUID + "-shd" +  req.GetParameters()["instanceType"]
+	sharedNamePrefix := "cluster-" + clusterUID + "-shd" + req.GetParameters()["instanceType"]
 	for i := 1; i <= 10; i++ {
 		// Generate NAS Instance name
 		sharedName = sharedNamePrefix + fmt.Sprintf("%03d", i)
@@ -110,7 +109,7 @@ func (s *controllerServer) convertSharedRequest(
 		if err != nil {
 			return "", 0, fmt.Errorf("Error getting nas instance: %s", err.Error())
 		}
-		if capBytes <= getNasInstanceCapacityBytes(nas) - reservedBytes {
+		if capBytes <= getNasInstanceCapacityBytes(nas)-reservedBytes {
 			// Place this volume in this nas.
 			glog.V(4).Infof("Place %s in shared NAS instance %s", name, sharedName)
 			break
@@ -173,7 +172,8 @@ func noOtherPvsInSharedNas(ctx context.Context, name, nasName string, driver *Ni
 			if strings.Contains(csi.VolumeHandle, nasName) {
 				nasFound = true
 				if name != pv.ObjectMeta.GetName() {
-					glog.V(4).Infof("Other PV %s found (status.phase=%s) in shared NAS %s", pv.ObjectMeta.GetName(), pv.Status.Phase, nasName)
+					glog.V(4).Infof("Other PV %s found (status.phase=%s) in shared NAS %s",
+						pv.ObjectMeta.GetName(), pv.Status.Phase, nasName)
 					noOtherPVs = false
 				}
 			}
@@ -214,7 +214,8 @@ func getSharedNameFromExistingPv(ctx context.Context, nasName string, driver *Ni
 }
 
 // Get the nas name with rondom string from prefixed part of the name
-func getSharedNameFromExistingNas(ctx context.Context, nasName string, driver *NifcloudNasDriver) (string, bool, error) {
+func getSharedNameFromExistingNas(
+	ctx context.Context, nasName string, driver *NifcloudNasDriver) (string, bool, error) {
 	instances, err := driver.config.Cloud.ListNasInstances(ctx)
 	if err != nil {
 		return nasName, false, err
@@ -275,7 +276,7 @@ func nfsJob(ip, path, name, namespace string) *batchv1.Job {
 							Image: "alpine",
 							VolumeMounts: []corev1.VolumeMount{
 								corev1.VolumeMount{
-									Name: "nfs",
+									Name:      "nfs",
 									MountPath: "/mnt",
 								},
 							},
@@ -287,7 +288,7 @@ func nfsJob(ip, path, name, namespace string) *batchv1.Job {
 							VolumeSource: corev1.VolumeSource{
 								NFS: &corev1.NFSVolumeSource{
 									Server: ip,
-									Path: path,
+									Path:   path,
 								},
 							},
 						},
@@ -313,13 +314,21 @@ func doNfsJob(ctx context.Context, job *batchv1.Job, kubeClient kubernetes.Inter
 		if !errors.IsAlreadyExists(err) {
 			return fmt.Errorf("Creating nfs job error - %s", err.Error())
 		}
-		kubeClient.BatchV1().Jobs(namespace).Delete(ctx, name, metav1.DeleteOptions{PropagationPolicy:&dp})
+		err = kubeClient.BatchV1().Jobs(namespace).Delete(ctx, name, metav1.DeleteOptions{PropagationPolicy: &dp})
+		if err != nil {
+			glog.Errorf("Error deleting job %s : %s", name, err.Error())
+		}
 		_, err = kubeClient.BatchV1().Jobs(namespace).Create(ctx, job, metav1.CreateOptions{})
 		if err != nil {
 			return fmt.Errorf("Re-creating nfs job error - %s", err.Error())
 		}
 	}
-	defer kubeClient.BatchV1().Jobs(namespace).Delete(ctx, name, metav1.DeleteOptions{PropagationPolicy:&dp})
+	defer func() {
+		err := kubeClient.BatchV1().Jobs(namespace).Delete(ctx, name, metav1.DeleteOptions{PropagationPolicy: &dp})
+		if err != nil {
+			glog.Errorf("Error deleting job %s : %s", name, err.Error())
+		}
+	}()
 
 	// wait for job completed with backoff retry
 	b := backoff.NewExponentialBackOff()
@@ -335,9 +344,8 @@ func doNfsJob(ctx context.Context, job *batchv1.Job, kubeClient kubernetes.Inter
 		if len(chkJob.Status.Conditions) > 0 {
 			if chkJob.Status.Conditions[0].Type == "Failed" {
 				return backoff.Permanent(fmt.Errorf("Job %s failed", name))
-			} else {
-				return nil
 			}
+			return nil
 		}
 		return fmt.Errorf("Job %s is running", name)
 	}
@@ -348,7 +356,7 @@ func doNfsJob(ctx context.Context, job *batchv1.Job, kubeClient kubernetes.Inter
 		if err != nil {
 			return fmt.Errorf("Listing job pods error - %s", err.Error())
 		}
-		for _, pod := range(podList.Items) {
+		for _, pod := range podList.Items {
 			refs := pod.ObjectMeta.GetOwnerReferences()
 			if len(refs) > 0 && refs[0].Name == name {
 				req := kubeClient.CoreV1().Pods(namespace).GetLogs(pod.Name, &corev1.PodLogOptions{})
@@ -357,7 +365,12 @@ func doNfsJob(ctx context.Context, job *batchv1.Job, kubeClient kubernetes.Inter
 					return fmt.Errorf("Logs request error - %s", err.Error())
 				}
 				reader := bufio.NewReader(podLogs)
-				defer podLogs.Close()
+				defer func() {
+					err := podLogs.Close()
+					if err != nil {
+						glog.Warningf("error closing pod logs in doResticJob : %s", err.Error())
+					}
+				}()
 				out := ""
 				for {
 					line, err := reader.ReadString('\n')

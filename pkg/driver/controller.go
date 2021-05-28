@@ -1,4 +1,3 @@
-
 /*
 Copyright 2018 The Kubernetes Authors.
 
@@ -19,21 +18,21 @@ package driver
 
 import (
 	"fmt"
-	"time"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/cenkalti/backoff"
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/golang/glog"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"github.com/cenkalti/backoff"
 
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/tools/cache"
-	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 
 	"github.com/nifcloud/nifcloud-sdk-go/service/nas"
 	"github.com/ryo-watanabe/nifcloud-nas-csi-driver/pkg/cloud"
@@ -41,13 +40,12 @@ import (
 )
 
 const (
-	minVolumeSize     int64 = 100 * util.Gb
-	driverNamespace = "nifcloud-nas-csi-driver" // Must set in options !!!
+	minVolumeSize int64 = 100 * util.Gb
 )
 
 // Volume attributes
 const (
-	attrIp         = "ip"
+	attrIP         = "ip"
 	attrSourcePath = "path"
 )
 
@@ -57,11 +55,11 @@ type controllerServer struct {
 }
 
 type controllerServerConfig struct {
-	driver *NifcloudNasDriver
-	cloud cloud.Interface
-	ipAllocator *IPAllocator
-	nasNameHolder *InstanceNameHolder
-	volumeInformer cache.SharedInformer
+	driver           *NifcloudNasDriver
+	cloud            cloud.Interface
+	ipAllocator      *IPAllocator
+	nasNameHolder    *InstanceNameHolder
+	volumeInformer   cache.SharedInformer
 	creatingPvsQueue *OperateResourceQueue
 	deletingPvsQueue *OperateResourceQueue
 }
@@ -76,7 +74,7 @@ func newControllerServer(config *controllerServerConfig) csi.ControllerServer {
 	// Prepare PersistenVolume informer
 	informer := informers.NewSharedInformerFactory(config.driver.config.KubeClient, time.Second*10)
 	volumeHandler := cache.ResourceEventHandlerFuncs{
-		AddFunc:    func(obj interface{}) { controller.pvAdded(obj) },
+		AddFunc: func(obj interface{}) { controller.pvAdded(obj) },
 		//UpdateFunc: func(oldObj, newObj interface{}) { controller.pvUpdated(newObj) },
 		DeleteFunc: func(obj interface{}) { controller.pvDeleted(obj) },
 	}
@@ -94,7 +92,7 @@ func newControllerServer(config *controllerServerConfig) csi.ControllerServer {
 }
 
 // Called when PersistentVolume resource created
-func (c *controllerServer) pvAdded(obj interface{}) {
+func (s *controllerServer) pvAdded(obj interface{}) {
 	var key string
 	var err error
 	if key, err = cache.DeletionHandlingMetaNamespaceKeyFunc(obj); err != nil {
@@ -102,11 +100,11 @@ func (c *controllerServer) pvAdded(obj interface{}) {
 		return
 	}
 	glog.V(4).Infof("PersistentVolume %s added", key)
-	c.config.creatingPvsQueue.UnsetQueue(key)
+	s.config.creatingPvsQueue.UnsetQueue(key)
 }
 
 // Called when PersistentVolume resource deleted
-func (c *controllerServer) pvDeleted(obj interface{}) {
+func (s *controllerServer) pvDeleted(obj interface{}) {
 	var key string
 	var err error
 	if key, err = cache.DeletionHandlingMetaNamespaceKeyFunc(obj); err != nil {
@@ -114,7 +112,7 @@ func (c *controllerServer) pvDeleted(obj interface{}) {
 		return
 	}
 	glog.V(4).Infof("PersistentVolume %s deleted", key)
-	c.config.deletingPvsQueue.UnsetQueue(key)
+	s.config.deletingPvsQueue.UnsetQueue(key)
 }
 
 // Get reserved CIDRIP from PVC's annotations
@@ -130,7 +128,7 @@ func getIpv4CiderFromPVC(ctx context.Context, name string, driver *NifcloudNasDr
 	}
 	for _, pvc := range pvcs.Items {
 		if string(pvc.ObjectMeta.GetUID()) == pvcUIDs[1] {
-			if cidrip, ok := pvc.ObjectMeta.GetAnnotations()[driver.config.Name + "/reservedIPv4Cidr"]; ok {
+			if cidrip, ok := pvc.ObjectMeta.GetAnnotations()[driver.config.Name+"/reservedIPv4Cidr"]; ok {
 				if !strings.Contains(cidrip, "/") {
 					cidrip = cidrip + "/32"
 				}
@@ -194,8 +192,9 @@ func getAllocatedStorage(capBytes int64, instanceType int64) *int64 {
 	return &allocatedStorage
 }
 
-// CreateVolume parameters
-func GenerateNasInstanceInput(name string, capBytes int64, params map[string]string) (*nas.CreateNASInstanceInput, error) {
+// GenerateNasInstanceInput generates CreateVolume parameters
+func GenerateNasInstanceInput(
+	name string, capBytes int64, params map[string]string) (*nas.CreateNASInstanceInput, error) {
 	// Set default parameters
 	var instanceType int64
 	instanceType = 0
@@ -227,14 +226,14 @@ func GenerateNasInstanceInput(name string, capBytes int64, params map[string]str
 		AvailabilityZone: &zone,
 		//MasterPrivateAddress: must set after
 		NASInstanceIdentifier: &name,
-		NASInstanceType: &instanceType,
+		NASInstanceType:       &instanceType,
 		//NASSecurityGroups: must set after
 		NetworkId: &network,
-		Protocol: &protocol,
+		Protocol:  &protocol,
 	}, nil
 }
 
-func CompareNasInstanceWithInput(n *nas.NASInstance, in *nas.CreateNASInstanceInput) error {
+func compareNasInstanceWithInput(n *nas.NASInstance, in *nas.CreateNASInstanceInput) error {
 	mismatches := []string{}
 	if *n.NASInstanceType != *in.NASInstanceType {
 		mismatches = append(mismatches, "NASInstanceType")
@@ -265,7 +264,8 @@ func CompareNasInstanceWithInput(n *nas.NASInstance, in *nas.CreateNASInstanceIn
 }
 
 // CreateVolume creates a NAS instance
-func (s *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequest) (res *csi.CreateVolumeResponse, err error) {
+func (s *controllerServer) CreateVolume(
+	ctx context.Context, req *csi.CreateVolumeRequest) (res *csi.CreateVolumeResponse, err error) {
 	glog.V(4).Infof("CreateVolume called with request %v", *req)
 
 	res = nil
@@ -324,7 +324,7 @@ func (s *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 	nasInput.NASSecurityGroups = []string{securityGroupName}
 
 	// Check volume source for snapshots
-	snapshotId := ""
+	snapshotID := ""
 	volumeSource := req.GetVolumeContentSource()
 	if volumeSource != nil {
 		if _, ok := volumeSource.GetType().(*csi.VolumeContentSource_Snapshot); !ok {
@@ -334,7 +334,7 @@ func (s *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 		if sourceSnapshot == nil {
 			return nil, status.Error(codes.InvalidArgument, "Error retrieving snapshot from the volumeContentSource")
 		}
-		snapshotId = sourceSnapshot.GetSnapshotId()
+		snapshotID = sourceSnapshot.GetSnapshotId()
 	}
 
 	// Check if the instance already exists
@@ -345,7 +345,7 @@ func (s *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 	}
 	if n != nil {
 		// Instance already exists, check if it meets the request
-		if err = CompareNasInstanceWithInput(n, nasInput); err != nil {
+		if err = compareNasInstanceWithInput(n, nasInput); err != nil {
 			err = status.Error(codes.AlreadyExists, err.Error())
 			return
 		}
@@ -400,7 +400,7 @@ func (s *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 			// Wait for creating -> available
 			err = s.waitForNASInstanceAvailable(name)
 			if err != nil {
-				err = status.Error(codes.Internal, "Error waiting for NASInstance creating > available: " + err.Error())
+				err = status.Error(codes.Internal, "Error waiting for NASInstance creating > available: "+err.Error())
 				return
 			}
 		} else {
@@ -418,7 +418,7 @@ func (s *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 
 	if *n.NoRootSquash == "false" {
 		// Set no_root_squash and get NAS Instance again
-		n, err = s.config.cloud.ModifyNasInstance(context.TODO(), name)
+		_, err = s.config.cloud.ModifyNasInstance(context.TODO(), name)
 		if err != nil {
 			err = status.Error(codes.Internal, err.Error())
 			return
@@ -427,7 +427,7 @@ func (s *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 		// Wait for modifying -> available again
 		err = s.waitForNASInstanceAvailable(name)
 		if err != nil {
-			err = status.Error(codes.Internal, "Error waiting for NASInstance modifying > available: " + err.Error())
+			err = status.Error(codes.Internal, "Error waiting for NASInstance modifying > available: "+err.Error())
 			return
 		}
 
@@ -443,7 +443,7 @@ func (s *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 	if req.GetParameters()["shared"] == "true" {
 		err = makeSourcePath(ctx, getNasInstancePrivateIP(n), *n.NASInstanceIdentifier, req.GetName(), s.config.driver)
 		if err != nil {
-			err = status.Error(codes.Internal, "error making source path for shared NASInstance:" + err.Error())
+			err = status.Error(codes.Internal, "error making source path for shared NASInstance:"+err.Error())
 			return
 		}
 	}
@@ -452,20 +452,20 @@ func (s *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 	glog.V(4).Infof("Volume created: %v", vol)
 
 	// Restoring from snapshot
-	if snapshotId != "" {
-		err = s.restoreSnapshot(ctx, snapshotId, vol)
+	if snapshotID != "" {
+		err = s.restoreSnapshot(ctx, snapshotID, vol)
 		if err != nil {
-			err = status.Error(codes.Internal, "error restoring volume contents from snapshot" + err.Error())
+			err = status.Error(codes.Internal, "error restoring volume contents from snapshot"+err.Error())
 			return
 		}
 		vol.ContentSource = &csi.VolumeContentSource{
 			Type: &csi.VolumeContentSource_Snapshot{
 				Snapshot: &csi.VolumeContentSource_SnapshotSource{
-					SnapshotId: snapshotId,
+					SnapshotId: snapshotID,
 				},
 			},
 		}
-		glog.V(4).Infof("Volume successfully restored from snapshot %s", snapshotId)
+		glog.V(4).Infof("Volume successfully restored from snapshot %s", snapshotID)
 	}
 
 	res = &csi.CreateVolumeResponse{Volume: vol}
@@ -492,7 +492,8 @@ func (s *controllerServer) getCloudInstancesReservedIPs(ctx context.Context) (ma
 	if err != nil {
 		return nil, status.Error(codes.Aborted, err.Error())
 	}
-	// Initialize an empty reserved list. It will be populated with all the reservedIPRanges obtained from the cloud instances
+	// Initialize an empty reserved list. It will be populated with
+	// all the reservedIPRanges obtained from the cloud instances
 	cloudInstancesReservedIPs := make(map[string]bool)
 	for _, instance := range instances {
 		cloudInstancesReservedIPs[*instance.Endpoint.PrivateAddress] = true
@@ -501,28 +502,29 @@ func (s *controllerServer) getCloudInstancesReservedIPs(ctx context.Context) (ma
 }
 
 // DeleteVolume deletes a GCFS instance
-func (s *controllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVolumeRequest) (res *csi.DeleteVolumeResponse, err error) {
+func (s *controllerServer) DeleteVolume(
+	ctx context.Context, req *csi.DeleteVolumeRequest) (res *csi.DeleteVolumeResponse, err error) {
 	glog.V(4).Infof("DeleteVolume called with request %v", *req)
 
-	volumeId := req.GetVolumeId()
-	if volumeId == "" {
+	volumeID := req.GetVolumeId()
+	if volumeID == "" {
 		return nil, status.Error(codes.InvalidArgument, "volume id is empty")
 	}
 
 	// Is shared
 	shared := false
 	sourcePath := ""
-	tokens := strings.Split(volumeId, "/")
+	tokens := strings.Split(volumeID, "/")
 	if len(tokens) == 3 {
-		volumeId = strings.Join(tokens[0:2], "/")
+		volumeID = strings.Join(tokens[0:2], "/")
 		sourcePath = tokens[2]
 		shared = true
 	}
 
-	nas, err := s.config.cloud.GetNasInstanceFromVolumeId(ctx, volumeId)
+	nas, err := s.config.cloud.GetNasInstanceFromVolumeID(ctx, volumeID)
 	if err != nil {
 		// An invalid ID should be treated as doesn't exist
-		glog.V(5).Infof("failed to get instance for volume %v deletion: %v", volumeId, err)
+		glog.V(5).Infof("failed to get instance for volume %v deletion: %v", volumeID, err)
 		return &csi.DeleteVolumeResponse{}, nil
 	}
 
@@ -535,18 +537,18 @@ func (s *controllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVolu
 		}()
 		err = s.config.deletingPvsQueue.Queue(sourcePath)
 		if err != nil {
-			return nil, status.Error(codes.Internal, "deleting queue:" + err.Error())
+			return nil, status.Error(codes.Internal, "deleting queue:"+err.Error())
 		}
 		s.config.deletingPvsQueue.Show()
 		// Remove source path on shared nas
 		err := removeSourcePath(ctx, getNasInstancePrivateIP(nas), *nas.NASInstanceIdentifier, sourcePath, s.config.driver)
 		if err != nil {
-			return nil, status.Error(codes.Internal, "removing source path:" + err.Error())
+			return nil, status.Error(codes.Internal, "removing source path:"+err.Error())
 		}
 		// check any other PVs on shared NAS
 		mustDeleted, err := noOtherPvsInSharedNas(ctx, sourcePath, *nas.NASInstanceIdentifier, s.config.driver)
 		if err != nil {
-			return nil, status.Error(codes.Internal, "checking other PVs on shared NAS:" + err.Error())
+			return nil, status.Error(codes.Internal, "checking other PVs on shared NAS:"+err.Error())
 		}
 		if !mustDeleted {
 			return &csi.DeleteVolumeResponse{}, nil
@@ -563,10 +565,12 @@ func (s *controllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVolu
 	return &csi.DeleteVolumeResponse{}, nil
 }
 
-func (s *controllerServer) ValidateVolumeCapabilities(ctx context.Context, req *csi.ValidateVolumeCapabilitiesRequest) (*csi.ValidateVolumeCapabilitiesResponse, error) {
+func (s *controllerServer) ValidateVolumeCapabilities(
+	ctx context.Context,
+	req *csi.ValidateVolumeCapabilitiesRequest) (*csi.ValidateVolumeCapabilitiesResponse, error) {
 	// Validate arguments
-	volumeId := req.GetVolumeId()
-	if volumeId == "" {
+	volumeID := req.GetVolumeId()
+	if volumeID == "" {
 		return nil, status.Error(codes.InvalidArgument, "volume id is empty")
 	}
 	caps := req.GetVolumeCapabilities()
@@ -575,7 +579,7 @@ func (s *controllerServer) ValidateVolumeCapabilities(ctx context.Context, req *
 	}
 
 	// Check that the volume exists
-	_, err := s.config.cloud.GetNasInstanceFromVolumeId(ctx, volumeId)
+	_, err := s.config.cloud.GetNasInstanceFromVolumeID(ctx, volumeID)
 	if err != nil {
 		// An invalid id format is treated as doesn't exist
 		return nil, status.Error(codes.NotFound, err.Error())
@@ -586,7 +590,7 @@ func (s *controllerServer) ValidateVolumeCapabilities(ctx context.Context, req *
 	if err := s.config.driver.validateVolumeCapabilities(caps); err != nil {
 		return &csi.ValidateVolumeCapabilitiesResponse{
 			//Supported: false,
-			Message:   err.Error(),
+			Message: err.Error(),
 		}, status.Error(codes.InvalidArgument, err.Error())
 	}
 
@@ -595,7 +599,9 @@ func (s *controllerServer) ValidateVolumeCapabilities(ctx context.Context, req *
 	}, nil
 }
 
-func (s *controllerServer) ControllerGetCapabilities(ctx context.Context, req *csi.ControllerGetCapabilitiesRequest) (*csi.ControllerGetCapabilitiesResponse, error) {
+func (s *controllerServer) ControllerGetCapabilities(
+	ctx context.Context,
+	req *csi.ControllerGetCapabilitiesRequest) (*csi.ControllerGetCapabilitiesResponse, error) {
 	return &csi.ControllerGetCapabilitiesResponse{
 		Capabilities: s.config.driver.cscap,
 	}, nil
@@ -614,10 +620,9 @@ func getRequestCapacity(capRange *csi.CapacityRange, min int64) int64 {
 		if rCap == 0 {
 			// request not set
 			return lCap
-		} else {
-			// request set, round up to min
-			return util.Min(util.Max(rCap, min), lCap)
 		}
+		// request set, round up to min
+		return util.Min(util.Max(rCap, min), lCap)
 	}
 
 	// limit not set
@@ -650,52 +655,56 @@ func (s *controllerServer) nasInstanceToCSIVolume(n *nas.NASInstance, req *csi.C
 	ip := getNasInstancePrivateIP(n)
 	if req.GetParameters()["shared"] == "true" {
 		return &csi.Volume{
-			VolumeId: s.config.cloud.GenerateVolumeIdFromNasInstance(n) + "/" + req.GetName(),
+			VolumeId:      s.config.cloud.GenerateVolumeIDFromNasInstance(n) + "/" + req.GetName(),
 			CapacityBytes: getRequestCapacityNoMinimum(req.GetCapacityRange()),
 			VolumeContext: map[string]string{
-				attrIp: ip,
+				attrIP:         ip,
 				attrSourcePath: req.GetName(),
 			},
 		}
-	} else {
-		return &csi.Volume{
-			VolumeId: s.config.cloud.GenerateVolumeIdFromNasInstance(n),
-			CapacityBytes: getNasInstanceCapacityBytes(n),
-			VolumeContext: map[string]string{
-				attrIp: ip,
-				attrSourcePath: "",
-			},
-		}
-
+	}
+	return &csi.Volume{
+		VolumeId:      s.config.cloud.GenerateVolumeIDFromNasInstance(n),
+		CapacityBytes: getNasInstanceCapacityBytes(n),
+		VolumeContext: map[string]string{
+			attrIP:         ip,
+			attrSourcePath: "",
+		},
 	}
 }
 
 ///// Not implemented methods
 
-func (s *controllerServer) ControllerPublishVolume(ctx context.Context, req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
+func (s *controllerServer) ControllerPublishVolume(
+	ctx context.Context, req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "ControllerPublishVolume unsupported")
 }
 
-func (s *controllerServer) ControllerUnpublishVolume(ctx context.Context, req *csi.ControllerUnpublishVolumeRequest) (*csi.ControllerUnpublishVolumeResponse, error) {
+func (s *controllerServer) ControllerUnpublishVolume(
+	ctx context.Context, req *csi.ControllerUnpublishVolumeRequest) (*csi.ControllerUnpublishVolumeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "ControllerUnpublishVolume unsupported")
 }
 
-func (s *controllerServer) ListVolumes(ctx context.Context, req *csi.ListVolumesRequest) (*csi.ListVolumesResponse, error) {
+func (s *controllerServer) ListVolumes(
+	ctx context.Context, req *csi.ListVolumesRequest) (*csi.ListVolumesResponse, error) {
 	// https://cloud.google.com/compute/docs/reference/beta/disks/list
 	// List volumes in the whole region? In only the zone that this controller is running?
 	return nil, status.Error(codes.Unimplemented, "")
 }
 
-func (s *controllerServer) GetCapacity(ctx context.Context, req *csi.GetCapacityRequest) (*csi.GetCapacityResponse, error) {
+func (s *controllerServer) GetCapacity(
+	ctx context.Context, req *csi.GetCapacityRequest) (*csi.GetCapacityResponse, error) {
 	// https://cloud.google.com/compute/quotas
 	// DISKS_TOTAL_GB.
 	return nil, status.Error(codes.Unimplemented, "")
 }
 
-func (s *controllerServer) ControllerExpandVolume(ctx context.Context, req *csi.ControllerExpandVolumeRequest) (*csi.ControllerExpandVolumeResponse, error) {
+func (s *controllerServer) ControllerExpandVolume(
+	ctx context.Context, req *csi.ControllerExpandVolumeRequest) (*csi.ControllerExpandVolumeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "ControllerExpandVolume unsupported")
 }
 
-func (s *controllerServer) ControllerGetVolume(ctx context.Context, req *csi.ControllerGetVolumeRequest) (*csi.ControllerGetVolumeResponse, error) {
+func (s *controllerServer) ControllerGetVolume(
+	ctx context.Context, req *csi.ControllerGetVolumeRequest) (*csi.ControllerGetVolumeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "ControllerGetVolume unsupported")
 }

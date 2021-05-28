@@ -18,16 +18,17 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"os"
 
 	"github.com/golang/glog"
+	clientset "github.com/kubernetes-csi/external-snapshotter/client/v3/clientset/versioned"
+	"github.com/ryo-watanabe/nifcloud-nas-csi-driver/pkg/cloud"
+	"github.com/ryo-watanabe/nifcloud-nas-csi-driver/pkg/driver"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/utils/mount"
-	"github.com/ryo-watanabe/nifcloud-nas-csi-driver/pkg/cloud"
-	"github.com/ryo-watanabe/nifcloud-nas-csi-driver/pkg/driver"
-	clientset "github.com/kubernetes-csi/external-snapshotter/client/v3/clientset/versioned"
 )
 
 var (
@@ -38,19 +39,22 @@ var (
 	kubeconfig    = flag.String("kubeconfig", "", "kubeconfig file path")
 	runController = flag.Bool("controller", false, "run controller service")
 	runNode       = flag.Bool("node", false, "run node service")
-	privateIpReg  = flag.Bool("privateipreg", false, "get private ip from network interface")
+	privateIPReg  = flag.Bool("privateipreg", false, "get private ip from network interface")
 	configurator  = flag.Bool("configurator", true, "run configurator")
-	restoreClstId = flag.Bool("restoreclstid", true, "restore NASSecurityGroup name on starting of controller")
+	restoreClstID = flag.Bool("restoreclstid", true, "restore NASSecurityGroup name on starting of controller")
 	devcloudep    = flag.String("devcloudep", "", "dev cloud endpoint")
 
-	version = "v0.5.0a"
+	version  = "v0.5.0a"
 	revision = "undef"
 )
 
 const driverName = "nas.csi.storage.nifcloud.com"
 
 func main() {
-	flag.Set("logtostderr", "true")
+	flagerr := flag.Set("logtostderr", "true")
+	if flagerr != nil {
+		fmt.Printf("Error in flag.Set : %s\n", flagerr.Error())
+	}
 	flag.Parse()
 
 	glog.Infof("Nifcloud Nas CSI driver version %v %v", version, revision)
@@ -97,9 +101,9 @@ func main() {
 		Cloud:         provider,
 		KubeClient:    kubeClient,
 		SnapClient:    snapClient,
-		PrivateIpReg:  *privateIpReg,
+		PrivateIPReg:  *privateIPReg,
 		Configurator:  *configurator,
-		RestoreClstId: *restoreClstId,
+		RestoreClstID: *restoreClstID,
 	}
 
 	nfnsDriver, err := driver.NewNifcloudNasDriver(config)

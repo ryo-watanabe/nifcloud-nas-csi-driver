@@ -30,14 +30,16 @@ func newIdentityServer(driver *NifcloudNasDriver) csi.IdentityServer {
 	return &identityServer{driver: driver}
 }
 
-func (s *identityServer) GetPluginInfo(ctx context.Context, req *csi.GetPluginInfoRequest) (*csi.GetPluginInfoResponse, error) {
+func (s *identityServer) GetPluginInfo(
+	ctx context.Context, req *csi.GetPluginInfoRequest) (*csi.GetPluginInfoResponse, error) {
 	return &csi.GetPluginInfoResponse{
 		Name:          s.driver.config.Name,
 		VendorVersion: s.driver.config.Version,
 	}, nil
 }
 
-func (s *identityServer) GetPluginCapabilities(ctx context.Context, req *csi.GetPluginCapabilitiesRequest) (*csi.GetPluginCapabilitiesResponse, error) {
+func (s *identityServer) GetPluginCapabilities(
+	ctx context.Context, req *csi.GetPluginCapabilitiesRequest) (*csi.GetPluginCapabilitiesResponse, error) {
 	return &csi.GetPluginCapabilitiesResponse{
 		Capabilities: []*csi.PluginCapability{
 			{

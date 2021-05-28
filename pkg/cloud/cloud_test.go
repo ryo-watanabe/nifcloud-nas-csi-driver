@@ -25,19 +25,19 @@ func TestGetNasInstance(t *testing.T) {
 	nasname := "testNasName"
 	cases := map[string]struct {
 		nasname string
-		exp interface{}
-		errmsg string
+		exp     interface{}
+		errmsg  string
 	}{
-		"found":{
+		"found": {
 			nasname: "testNasName",
-			exp: nas.NASInstance{NASInstanceIdentifier: &nasname},
+			exp:     nas.NASInstance{NASInstanceIdentifier: &nasname},
 		},
-		"not found":{
+		"not found": {
 			nasname: "foo",
-			errmsg: "Client.InvalidParameter.NotFound.NASInstanceIdentifier",
+			errmsg:  "Client.InvalidParameter.NotFound.NASInstanceIdentifier",
 		},
 	}
-	for name, c := range(cases) {
+	for name, c := range cases {
 		t.Logf("====== Test case [%s] :", name)
 		cloud := &Cloud{
 			Nas: &mockNasClient{},
@@ -56,10 +56,10 @@ func TestListNasInstance(t *testing.T) {
 	nasname2 := "testNasName2"
 	cases := map[string]struct {
 		output *nas.DescribeNASInstancesOutput
-		exp interface{}
+		exp    interface{}
 		errmsg string
 	}{
-		"found":{
+		"found": {
 			output: &nas.DescribeNASInstancesOutput{
 				NASInstances: []nas.NASInstance{
 					nas.NASInstance{NASInstanceIdentifier: &nasname1},
@@ -72,7 +72,7 @@ func TestListNasInstance(t *testing.T) {
 			},
 		},
 	}
-	for name, c := range(cases) {
+	for name, c := range cases {
 		t.Logf("====== Test case [%s] :", name)
 		cloud := &Cloud{
 			Nas: &mockNasClient{Output: c.output},
@@ -89,20 +89,20 @@ func TestListNasInstance(t *testing.T) {
 func TestCreateNasInstance(t *testing.T) {
 	nasname := "testNasName"
 	cases := map[string]struct {
-		input *nas.CreateNASInstanceInput
-		exp interface{}
+		input  *nas.CreateNASInstanceInput
+		exp    interface{}
 		errmsg string
 	}{
-		"created":{
+		"created": {
 			input: &nas.CreateNASInstanceInput{NASInstanceIdentifier: &nasname},
-			exp: nas.NASInstance{NASInstanceIdentifier: &nasname},
+			exp:   nas.NASInstance{NASInstanceIdentifier: &nasname},
 		},
-		"name not set":{
-			input: &nas.CreateNASInstanceInput{},
+		"name not set": {
+			input:  &nas.CreateNASInstanceInput{},
 			errmsg: "Client.InvalidParameter.Reqiured.NASInstanceIdentifier",
 		},
 	}
-	for name, c := range(cases) {
+	for name, c := range cases {
 		t.Logf("====== Test case [%s] :", name)
 		cloud := &Cloud{
 			Nas: &mockNasClient{},
@@ -121,22 +121,22 @@ func TestModifyNasInstance(t *testing.T) {
 	nrs := "true"
 	cases := map[string]struct {
 		nasname string
-		exp interface{}
-		errmsg string
+		exp     interface{}
+		errmsg  string
 	}{
-		"modified":{
+		"modified": {
 			nasname: "testNasName",
 			exp: nas.NASInstance{
 				NASInstanceIdentifier: &nasname,
-				NoRootSquash: &nrs,
+				NoRootSquash:          &nrs,
 			},
 		},
-		"not found":{
+		"not found": {
 			nasname: "foo",
-			errmsg: "Client.InvalidParameter.NotFound.NASInstanceIdentifier",
+			errmsg:  "Client.InvalidParameter.NotFound.NASInstanceIdentifier",
 		},
 	}
-	for name, c := range(cases) {
+	for name, c := range cases {
 		t.Logf("====== Test case [%s] :", name)
 		cloud := &Cloud{
 			Nas: &mockNasClient{},
@@ -155,13 +155,13 @@ func TestChangeNasInstanceSecurityGroup(t *testing.T) {
 	sgname := "testSGName"
 	cases := map[string]struct {
 		nasname string
-		sgname string
-		exp interface{}
-		errmsg string
+		sgname  string
+		exp     interface{}
+		errmsg  string
 	}{
-		"modified":{
+		"modified": {
 			nasname: "testNasName",
-			sgname: "testSGName",
+			sgname:  "testSGName",
 			exp: nas.NASInstance{
 				NASInstanceIdentifier: &nasname,
 				NASSecurityGroups: []nas.NASSecurityGroup{
@@ -169,13 +169,13 @@ func TestChangeNasInstanceSecurityGroup(t *testing.T) {
 				},
 			},
 		},
-		"not found":{
+		"not found": {
 			nasname: "testNasName",
-			sgname: "foo",
-			errmsg: "Client.InvalidParameter.NotFound.NASSecurityGroupName",
+			sgname:  "foo",
+			errmsg:  "Client.InvalidParameter.NotFound.NASSecurityGroupName",
 		},
 	}
-	for name, c := range(cases) {
+	for name, c := range cases {
 		t.Logf("====== Test case [%s] :", name)
 		cloud := &Cloud{
 			Nas: &mockNasClient{},
@@ -192,17 +192,17 @@ func TestChangeNasInstanceSecurityGroup(t *testing.T) {
 func TestDeleteNasInstance(t *testing.T) {
 	cases := map[string]struct {
 		nasname string
-		errmsg string
+		errmsg  string
 	}{
-		"deleted":{
+		"deleted": {
 			nasname: "testNasName",
 		},
-		"not found":{
+		"not found": {
 			nasname: "foo",
-			errmsg: "Client.InvalidParameter.NotFound.NASInstanceIdentifier",
+			errmsg:  "Client.InvalidParameter.NotFound.NASInstanceIdentifier",
 		},
 	}
-	for name, c := range(cases) {
+	for name, c := range cases {
 		t.Logf("====== Test case [%s] :", name)
 		cloud := &Cloud{
 			Nas: &mockNasClient{},
@@ -216,28 +216,28 @@ func TestGetNasInstanceFromVolumeId(t *testing.T) {
 	nasname := "testNasName"
 	n := nas.NASInstance{NASInstanceIdentifier: &nasname}
 	cloud := &Cloud{
-		Nas: &mockNasClient{},
+		Nas:    &mockNasClient{},
 		Region: "testRegion",
 	}
-	volumeId := cloud.GenerateVolumeIdFromNasInstance(&n)
-	if volumeId != "testRegion/testNasName" {
-		t.Errorf("volumeId not matched : %s", volumeId)
+	volumeID := cloud.GenerateVolumeIDFromNasInstance(&n)
+	if volumeID != "testRegion/testNasName" {
+		t.Errorf("volumeID not matched : %s", volumeID)
 	}
 
 	cases := map[string]struct {
 		nasname string
-		errmsg string
+		errmsg  string
 	}{
-		"found":{
+		"found": {
 			nasname: "testRegion/testNasName",
 		},
-		"not found":{
+		"not found": {
 			nasname: "testNasName",
-			errmsg: "volume id \"testNasName\" unexpected format: got 1 tokens",
+			errmsg:  "volume id \"testNasName\" unexpected format: got 1 tokens",
 		},
 	}
-	for name, c := range(cases) {
-		output, err := cloud.GetNasInstanceFromVolumeId(context.TODO(), c.nasname)
+	for name, c := range cases {
+		output, err := cloud.GetNasInstanceFromVolumeID(context.TODO(), c.nasname)
 		if err != nil {
 			checkResult(t, nil, n, name, c.errmsg, err)
 		} else {
@@ -250,19 +250,19 @@ func TestGetNasSecurityGroup(t *testing.T) {
 	sgname := "testSGName"
 	cases := map[string]struct {
 		sgname string
-		exp interface{}
+		exp    interface{}
 		errmsg string
 	}{
-		"found":{
+		"found": {
 			sgname: "testSGName",
-			exp: nas.NASSecurityGroup{NASSecurityGroupName: &sgname},
+			exp:    nas.NASSecurityGroup{NASSecurityGroupName: &sgname},
 		},
-		"not found":{
+		"not found": {
 			sgname: "foo",
 			errmsg: "Client.InvalidParameter.NotFound.NASSecurityGroupName",
 		},
 	}
-	for name, c := range(cases) {
+	for name, c := range cases {
 		t.Logf("====== Test case [%s] :", name)
 		cloud := &Cloud{
 			Nas: &mockNasClient{},
@@ -279,20 +279,20 @@ func TestGetNasSecurityGroup(t *testing.T) {
 func TestCreateNasSecurityGroup(t *testing.T) {
 	sgname := "testSGName"
 	cases := map[string]struct {
-		input *nas.CreateNASSecurityGroupInput
-		exp interface{}
+		input  *nas.CreateNASSecurityGroupInput
+		exp    interface{}
 		errmsg string
 	}{
-		"created":{
+		"created": {
 			input: &nas.CreateNASSecurityGroupInput{NASSecurityGroupName: &sgname},
-			exp: nas.NASSecurityGroup{NASSecurityGroupName: &sgname},
+			exp:   nas.NASSecurityGroup{NASSecurityGroupName: &sgname},
 		},
-		"name not set":{
-			input: &nas.CreateNASSecurityGroupInput{},
+		"name not set": {
+			input:  &nas.CreateNASSecurityGroupInput{},
 			errmsg: "Client.InvalidParameter.Required.NASSecurityGroupName",
 		},
 	}
-	for name, c := range(cases) {
+	for name, c := range cases {
 		t.Logf("====== Test case [%s] :", name)
 		cloud := &Cloud{
 			Nas: &mockNasClient{},
@@ -308,7 +308,7 @@ func TestCreateNasSecurityGroup(t *testing.T) {
 
 var (
 	statusAuthorizing = "authorizing"
-	statusRevoking = "revoking"
+	statusRevoking    = "revoking"
 )
 
 func TestAuthorizeCIDRIP(t *testing.T) {
@@ -317,10 +317,10 @@ func TestAuthorizeCIDRIP(t *testing.T) {
 	cases := map[string]struct {
 		sgname string
 		cidrip string
-		exp interface{}
+		exp    interface{}
 		errmsg string
 	}{
-		"authorized":{
+		"authorized": {
 			sgname: "testSGName",
 			cidrip: "192.168.0.1/32",
 			exp: nas.NASSecurityGroup{
@@ -333,13 +333,13 @@ func TestAuthorizeCIDRIP(t *testing.T) {
 				},
 			},
 		},
-		"not found":{
+		"not found": {
 			sgname: "foo",
 			cidrip: "192.168.0.1/32",
 			errmsg: "Client.InvalidParameter.Required.NASSecurityGroupName",
 		},
 	}
-	for name, c := range(cases) {
+	for name, c := range cases {
 		t.Logf("====== Test case [%s] :", name)
 		cloud := &Cloud{
 			Nas: &mockNasClient{},
@@ -359,10 +359,10 @@ func TestRevokeCIDRIP(t *testing.T) {
 	cases := map[string]struct {
 		sgname string
 		cidrip string
-		exp interface{}
+		exp    interface{}
 		errmsg string
 	}{
-		"revoked":{
+		"revoked": {
 			sgname: "testSGName",
 			cidrip: "192.168.0.1/32",
 			exp: nas.NASSecurityGroup{
@@ -375,13 +375,13 @@ func TestRevokeCIDRIP(t *testing.T) {
 				},
 			},
 		},
-		"not found":{
+		"not found": {
 			sgname: "testSGName",
 			cidrip: "192.168.1.1/32",
 			errmsg: "Client.InvalidParameter.NotFound.CIDRIP",
 		},
 	}
-	for name, c := range(cases) {
+	for name, c := range cases {
 		t.Logf("====== Test case [%s] :", name)
 		cloud := &Cloud{
 			Nas: &mockNasClient{},
@@ -400,10 +400,10 @@ func TestListClusters(t *testing.T) {
 	clustername2 := "testClusterName2"
 	cases := map[string]struct {
 		output *hatoba.ListClustersOutput
-		exp interface{}
+		exp    interface{}
 		errmsg string
 	}{
-		"found":{
+		"found": {
 			output: &hatoba.ListClustersOutput{
 				Clusters: []hatoba.Cluster{
 					hatoba.Cluster{Name: &clustername1},
@@ -416,7 +416,7 @@ func TestListClusters(t *testing.T) {
 			},
 		},
 	}
-	for name, c := range(cases) {
+	for name, c := range cases {
 		t.Logf("====== Test case [%s] :", name)
 		cloud := &Cloud{
 			Hatoba: &mockHatobaClient{Output: c.output},
@@ -435,10 +435,10 @@ func TestListInstances(t *testing.T) {
 	instancename2 := "testInstanceName2"
 	cases := map[string]struct {
 		output *computing.DescribeInstancesOutput
-		exp interface{}
+		exp    interface{}
 		errmsg string
 	}{
-		"found":{
+		"found": {
 			output: &computing.DescribeInstancesOutput{
 				ReservationSet: []computing.ReservationSet{
 					computing.ReservationSet{
@@ -459,7 +459,7 @@ func TestListInstances(t *testing.T) {
 			},
 		},
 	}
-	for name, c := range(cases) {
+	for name, c := range cases {
 		t.Logf("====== Test case [%s] :", name)
 		cloud := &Cloud{
 			Computing: &mockComputingClient{Output: c.output},
@@ -477,19 +477,19 @@ func TestGetPrivateLan(t *testing.T) {
 	lanname := "testLanName"
 	cases := map[string]struct {
 		lanname string
-		exp interface{}
-		errmsg string
+		exp     interface{}
+		errmsg  string
 	}{
-		"found":{
+		"found": {
 			lanname: "testLanName",
-			exp: computing.PrivateLanSet{NetworkId: &lanname},
+			exp:     computing.PrivateLanSet{NetworkId: &lanname},
 		},
-		"not found":{
+		"not found": {
 			lanname: "foo",
-			errmsg: "InvalidParameterNotFound.NetworkId",
+			errmsg:  "InvalidParameterNotFound.NetworkId",
 		},
 	}
-	for name, c := range(cases) {
+	for name, c := range cases {
 		t.Logf("====== Test case [%s] :", name)
 		cloud := &Cloud{
 			Computing: &mockComputingClient{},
@@ -506,36 +506,36 @@ func TestGetPrivateLan(t *testing.T) {
 func TestGetDhcpStatus(t *testing.T) {
 	typeStatic := "static"
 	ipAddress := "192.168.0.31"
-	startIp := "192.168.10.1"
-	stopIp := "192.168.10.127"
+	startIP := "192.168.10.1"
+	stopIP := "192.168.10.127"
 	cases := map[string]struct {
-		lanname string
+		lanname  string
 		routerid string
-		exp_pools interface{}
-		exp_ips interface{}
-		errmsg string
+		expPools interface{}
+		expIps   interface{}
+		errmsg   string
 	}{
-		"found":{
-			lanname: "testLanName",
+		"found": {
+			lanname:  "testLanName",
 			routerid: "testRouterName",
-			exp_pools: []computing.IpAddressPoolSet{
+			expPools: []computing.IpAddressPoolSet{
 				computing.IpAddressPoolSet{
-					StartIpAddress: &startIp,
-					StopIpAddress: &stopIp,
+					StartIpAddress: &startIP,
+					StopIpAddress:  &stopIP,
 				},
 			},
-			exp_ips: []computing.DhcpIpAddressSet{
+			expIps: []computing.DhcpIpAddressSet{
 				computing.DhcpIpAddressSet{
 					LeaseType: &typeStatic,
 					IpAddress: &ipAddress,
 				},
 			},
 		},
-		"not found":{
+		"not found": {
 			errmsg: "InvalidParameterNotFound.RouterId",
 		},
 	}
-	for name, c := range(cases) {
+	for name, c := range cases {
 		t.Logf("====== Test case [%s] :", name)
 		cloud := &Cloud{
 			Computing: &mockComputingClient{},
@@ -544,9 +544,9 @@ func TestGetDhcpStatus(t *testing.T) {
 		if err != nil {
 			checkResult(t, nil, nil, name, c.errmsg, err)
 		} else {
-			checkResult(t, pools, c.exp_pools, name, c.errmsg, err)
-			if !reflect.DeepEqual(ips, c.exp_ips) {
-				t.Errorf("output not matched in case [%s]\nexpected : %v\nbut got  : %v", name, ips, c.exp_ips)
+			checkResult(t, pools, c.expPools, name, c.errmsg, err)
+			if !reflect.DeepEqual(ips, c.expIps) {
+				t.Errorf("output not matched in case [%s]\nexpected : %v\nbut got  : %v", name, ips, c.expIps)
 			}
 		}
 	}
@@ -557,10 +557,10 @@ func TestListRdbInstances(t *testing.T) {
 	rdbname2 := "testRdbName2"
 	cases := map[string]struct {
 		output *rdb.DescribeDBInstancesOutput
-		exp interface{}
+		exp    interface{}
 		errmsg string
 	}{
-		"found":{
+		"found": {
 			output: &rdb.DescribeDBInstancesOutput{
 				DBInstances: []rdb.DBInstance{
 					rdb.DBInstance{DBName: &rdbname1},
@@ -573,7 +573,7 @@ func TestListRdbInstances(t *testing.T) {
 			},
 		},
 	}
-	for name, c := range(cases) {
+	for name, c := range cases {
 		t.Logf("====== Test case [%s] :", name)
 		cloud := &Cloud{
 			Rdb: &mockRdbClient{Output: c.output},
@@ -598,7 +598,7 @@ func checkResult(t *testing.T, exp, got interface{}, name, errmsg string, err er
 		}
 	} else {
 		if err == nil {
-			t.Errorf("expected error not occured in case [%s]\nexpected : %s", name, errmsg)
+			t.Errorf("expected error not occurred in case [%s]\nexpected : %s", name, errmsg)
 		} else if !strings.Contains(err.Error(), errmsg) {
 			t.Errorf("error message not matched in case [%s]\nmust contains : %s\nbut got : %s", name, errmsg, err.Error())
 		}
@@ -610,14 +610,14 @@ func checkResult(t *testing.T, exp, got interface{}, name, errmsg string, err er
 type mockNasClient struct {
 	nasiface.ClientAPI
 	Output interface{}
-	Err error
+	Err    error
 }
 
 func mockRequest(m *mockNasClient) *aws.Request {
 	req := &aws.Request{
 		HTTPRequest:  &http.Request{},
 		HTTPResponse: &http.Response{},
-		Retryer: aws.NoOpRetryer{},
+		Retryer:      aws.NoOpRetryer{},
 	}
 	if m.Output != nil {
 		req.Data = m.Output
@@ -627,7 +627,8 @@ func mockRequest(m *mockNasClient) *aws.Request {
 	return req
 }
 
-func (m *mockNasClient) DescribeNASInstancesRequest(input *nas.DescribeNASInstancesInput) nas.DescribeNASInstancesRequest {
+func (m *mockNasClient) DescribeNASInstancesRequest(
+	input *nas.DescribeNASInstancesInput) nas.DescribeNASInstancesRequest {
 	if input.NASInstanceIdentifier == nil {
 		// Do nothing
 	} else {
@@ -664,7 +665,7 @@ func (m *mockNasClient) ModifyNASInstanceRequest(input *nas.ModifyNASInstanceInp
 		n := &nas.ModifyNASInstanceOutput{
 			NASInstance: &nas.NASInstance{
 				NASInstanceIdentifier: input.NASInstanceIdentifier,
-				NoRootSquash: input.NoRootSquash,
+				NoRootSquash:          input.NoRootSquash,
 			},
 		}
 		if len(input.NASSecurityGroups) > 0 {
@@ -690,7 +691,8 @@ func (m *mockNasClient) DeleteNASInstanceRequest(input *nas.DeleteNASInstanceInp
 	return nas.DeleteNASInstanceRequest{Request: mockRequest(m)}
 }
 
-func (m *mockNasClient) DescribeNASSecurityGroupsRequest(input *nas.DescribeNASSecurityGroupsInput) nas.DescribeNASSecurityGroupsRequest {
+func (m *mockNasClient) DescribeNASSecurityGroupsRequest(
+	input *nas.DescribeNASSecurityGroupsInput) nas.DescribeNASSecurityGroupsRequest {
 	if input.NASSecurityGroupName == nil {
 		// Do nothing
 	} else {
@@ -707,7 +709,8 @@ func (m *mockNasClient) DescribeNASSecurityGroupsRequest(input *nas.DescribeNASS
 	return nas.DescribeNASSecurityGroupsRequest{Request: mockRequest(m)}
 }
 
-func (m *mockNasClient) CreateNASSecurityGroupRequest(input *nas.CreateNASSecurityGroupInput) nas.CreateNASSecurityGroupRequest {
+func (m *mockNasClient) CreateNASSecurityGroupRequest(
+	input *nas.CreateNASSecurityGroupInput) nas.CreateNASSecurityGroupRequest {
 	if input.NASSecurityGroupName == nil {
 		m.Err = awserr.New("Client.InvalidParameter.Required.NASSecurityGroupName", "", fmt.Errorf(""))
 	} else {
@@ -763,14 +766,14 @@ func (m *mockNasClient) RevokeNASSecurityGroupIngressRequest(
 type mockHatobaClient struct {
 	hatobaiface.ClientAPI
 	Output interface{}
-	Err error
+	Err    error
 }
 
 func mockHatobaRequest(m *mockHatobaClient) *aws.Request {
 	req := &aws.Request{
 		HTTPRequest:  &http.Request{},
 		HTTPResponse: &http.Response{},
-		Retryer: aws.NoOpRetryer{},
+		Retryer:      aws.NoOpRetryer{},
 	}
 	if m.Output != nil {
 		req.Data = m.Output
@@ -790,14 +793,14 @@ func (m *mockHatobaClient) ListClustersRequest(input *hatoba.ListClustersInput) 
 type mockComputingClient struct {
 	computingiface.ClientAPI
 	Output interface{}
-	Err error
+	Err    error
 }
 
 func mockComputingRequest(m *mockComputingClient) *aws.Request {
 	req := &aws.Request{
 		HTTPRequest:  &http.Request{},
 		HTTPResponse: &http.Response{},
-		Retryer: aws.NoOpRetryer{},
+		Retryer:      aws.NoOpRetryer{},
 	}
 	if m.Output != nil {
 		req.Data = m.Output
@@ -833,8 +836,8 @@ func (m *mockComputingClient) NiftyDescribeDhcpStatusRequest(
 	lanname := "testLanName"
 	typeStatic := "static"
 	ipAddress := "192.168.0.31"
-	startIp := "192.168.10.1"
-	stopIp := "192.168.10.127"
+	startIP := "192.168.10.1"
+	stopIP := "192.168.10.127"
 	if pstr(input.RouterId) == "" {
 		m.Err = awserr.New("InvalidParameterNotFound.RouterId", "", fmt.Errorf(""))
 	} else {
@@ -851,8 +854,8 @@ func (m *mockComputingClient) NiftyDescribeDhcpStatusRequest(
 						},
 						IpAddressPoolSet: []computing.IpAddressPoolSet{
 							computing.IpAddressPoolSet{
-								StartIpAddress: &startIp,
-								StopIpAddress: &stopIp,
+								StartIpAddress: &startIP,
+								StopIpAddress:  &stopIP,
 							},
 						},
 					},
@@ -868,14 +871,14 @@ func (m *mockComputingClient) NiftyDescribeDhcpStatusRequest(
 type mockRdbClient struct {
 	rdbiface.ClientAPI
 	Output interface{}
-	Err error
+	Err    error
 }
 
 func mockRdbRequest(m *mockRdbClient) *aws.Request {
 	req := &aws.Request{
 		HTTPRequest:  &http.Request{},
 		HTTPResponse: &http.Response{},
-		Retryer: aws.NoOpRetryer{},
+		Retryer:      aws.NoOpRetryer{},
 	}
 	if m.Output != nil {
 		req.Data = m.Output

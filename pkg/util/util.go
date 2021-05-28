@@ -17,19 +17,23 @@ limitations under the License.
 package util
 
 const (
+	// Gb expresses GiB
 	Gb = 1024 * 1024 * 1024
+	// Tb expresses TiB
 	Tb = 1024 * Gb
 )
 
-// Round up to the nearest Gb
+// RoundBytesToGb rounds up to the nearest Gb
 func RoundBytesToGb(bytes int64) int64 {
 	return (bytes + Gb - 1) / Gb
 }
 
+// GbToBytes converts GiB to bytes
 func GbToBytes(gbs int64) int64 {
 	return gbs * Gb
 }
 
+// Min chooses lesser one
 func Min(a, b int64) int64 {
 	if a < b {
 		return a
@@ -37,6 +41,7 @@ func Min(a, b int64) int64 {
 	return b
 }
 
+// Max chooses bigger one
 func Max(a, b int64) int64 {
 	if a > b {
 		return a

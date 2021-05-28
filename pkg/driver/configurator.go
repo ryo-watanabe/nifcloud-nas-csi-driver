@@ -7,27 +7,29 @@ import (
 
 	"github.com/golang/glog"
 	"golang.org/x/net/context"
+	corev1 "k8s.io/api/core/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/kubernetes"
-	corev1 "k8s.io/api/core/v1"
-	storagev1 "k8s.io/api/storage/v1"
 
 	"github.com/nifcloud/nifcloud-sdk-go/service/computing"
 	"github.com/ryo-watanabe/nifcloud-nas-csi-driver/pkg/cloud"
 )
 
+// NodeConfig holds IPs of a node
 type NodeConfig struct {
 	name      string
 	publicIP  string
 	privateIP string
 }
 
+// Configurator sets private LAN configurations for CSI
 type Configurator struct {
 	driver     *NifcloudNasDriver
 	kubeClient kubernetes.Interface
 	cloud      cloud.Interface
-	networkId  string
+	networkID  string
 	zone       string
 	nodes      []NodeConfig
 	cidr       string
@@ -45,6 +47,7 @@ func newConfigurator(driver *NifcloudNasDriver) *Configurator {
 	}
 }
 
+// Init initializes configurations
 func (c *Configurator) Init() error {
 	err := c.installStorageClasses()
 	if err != nil {
@@ -64,6 +67,7 @@ func (c *Configurator) Init() error {
 	return c.configure(classesUpdated)
 }
 
+// Update updates configurations if necessary
 func (c *Configurator) Update() error {
 	nodesUpdated, err := c.getNodeConfigs()
 	if err != nil {
@@ -112,7 +116,7 @@ func (c *Configurator) configure(configureClasses bool) error {
 		}
 		if vmFound == len(c.nodes) {
 			if configureClasses {
-				c.networkId = pstr(cl.NetworkConfig.NetworkId)
+				c.networkID = pstr(cl.NetworkConfig.NetworkId)
 				c.zone = zone
 			}
 			clusterName = *cl.Name
@@ -127,14 +131,14 @@ func (c *Configurator) configure(configureClasses bool) error {
 			return fmt.Errorf("getting vm list : %s", err.Error())
 		}
 		vmFound := 0
-		networkId := ""
+		networkID := ""
 		zone := ""
 		for _, vm := range vms {
 			for i, nc := range c.nodes {
 				if pstr(vm.IpAddress) == nc.publicIP {
 					for _, nif := range vm.NetworkInterfaceSet {
 						if pstr(nif.PrivateIpAddress) == pstr(vm.PrivateIpAddress) {
-							networkId = pstr(nif.NiftyNetworkId)
+							networkID = pstr(nif.NiftyNetworkId)
 						}
 					}
 					c.nodes[i].privateIP = pstr(vm.PrivateIpAddress)
@@ -145,9 +149,9 @@ func (c *Configurator) configure(configureClasses bool) error {
 				}
 			}
 		}
-		if vmFound == len(c.nodes) && networkId != "" && zone != "" {
+		if vmFound == len(c.nodes) && networkID != "" && zone != "" {
 			if configureClasses {
-				c.networkId = networkId
+				c.networkID = networkID
 				c.zone = zone
 			}
 		} else {
@@ -157,19 +161,19 @@ func (c *Configurator) configure(configureClasses bool) error {
 		glog.V(4).Infof("Configurator : found corresponding cluster %s", clusterName)
 	}
 
-	glog.V(4).Infof("Configurator : private NetworkId=%s zone=%s", c.networkId, c.zone)
+	glog.V(4).Infof("Configurator : private NetworkId=%s zone=%s", c.networkID, c.zone)
 	for _, nc := range c.nodes {
 		glog.V(4).Infof("Configurator : found node PublicIP=%s PrivateIP=%s", nc.publicIP, nc.privateIP)
 	}
 
-	if c.networkId == "net-COMMON_PRIVATE" {
+	if c.networkID == "net-COMMON_PRIVATE" {
 		c.cidr = ""
 	} else if configureClasses {
 
 		// Get Private Lan and prepare recommended cidr divs
-		lan, err := c.cloud.GetPrivateLan(c.ctx, c.networkId)
+		lan, err := c.cloud.GetPrivateLan(c.ctx, c.networkID)
 		if err != nil {
-			return fmt.Errorf("getting private lan %s : %s", c.networkId, err.Error())
+			return fmt.Errorf("getting private lan %s : %s", c.networkID, err.Error())
 		}
 		_, lanCidrBlk, err := net.ParseCIDR(pstr(lan.CidrBlock))
 		if err != nil {
@@ -179,7 +183,8 @@ func (c *Configurator) configure(configureClasses bool) error {
 		lanMask, bits := lanCidrBlk.Mask.Size()
 		offset := 4
 		minmaskfordiv := 5
-		for ; bits-lanMask-offset < minmaskfordiv; offset-- {}
+		for ; bits-lanMask-offset < minmaskfordiv; offset-- {
+		}
 		rcmdCidrBlks, err := newCidrDivs(lanCidrBlk, offset)
 		if err != nil {
 			return fmt.Errorf("initialing recommended cidr divs : %s", err.Error())
@@ -197,7 +202,7 @@ func (c *Configurator) configure(configureClasses bool) error {
 			return fmt.Errorf("getting RDB list : %s", err.Error())
 		}
 		for _, db := range dbs {
-			if pstr(db.NiftyNetworkId) == c.networkId {
+			if pstr(db.NiftyNetworkId) == c.networkID {
 				glog.V(4).Infof("Configurator : dropping CIDR div with rdb IP %s", pstr(db.NiftyMasterPrivateAddress))
 				err = rcmdCidrBlks.dropWithIP(pstr(db.NiftyMasterPrivateAddress))
 				if err != nil {
@@ -211,10 +216,10 @@ func (c *Configurator) configure(configureClasses bool) error {
 		staticIps := []computing.DhcpIpAddressSet{}
 
 		for _, r := range lan.RouterSet {
-			pls, ips, err := c.cloud.GetDhcpStatus(c.ctx, c.networkId, *r.RouterId)
+			pls, ips, err := c.cloud.GetDhcpStatus(c.ctx, c.networkID, *r.RouterId)
 			if err != nil {
 				return fmt.Errorf("getting dhcp ip pool networkId:%s routerId:%s : %s",
-					c.networkId, *r.RouterId, err.Error())
+					c.networkID, *r.RouterId, err.Error())
 			}
 			ipPools = append(ipPools, pls...)
 			staticIps = append(staticIps, ips...)
@@ -339,14 +344,14 @@ func (c *Configurator) setNodeConfigs() error {
 		}
 		annotations := csinode.ObjectMeta.GetAnnotations()
 		if annotations == nil {
-			annotations = make(map[string]string, 0)
+			annotations = make(map[string]string)
 		}
 		if annotations[c.driver.config.Name+"/privateIp"] == conf.privateIP {
 			continue
 		}
 		annotations[c.driver.config.Name+"/privateIp"] = conf.privateIP
 		csinode.SetAnnotations(annotations)
-		csinode, err = c.kubeClient.StorageV1().CSINodes().Update(c.ctx, csinode, metav1.UpdateOptions{})
+		_, err = c.kubeClient.StorageV1().CSINodes().Update(c.ctx, csinode, metav1.UpdateOptions{})
 		if err != nil {
 			return fmt.Errorf("updating csinode in SetNodeConfigs : %s", err.Error())
 		}
@@ -359,7 +364,7 @@ func (c *Configurator) setNodeConfigs() error {
 func (c *Configurator) getStorageClasses() (bool, error) {
 	mustUpdate := false
 	c.zone = ""
-	c.networkId = ""
+	c.networkID = ""
 
 	// Get storagev1.storageclasses
 	cls, err := c.kubeClient.StorageV1().StorageClasses().List(c.ctx, metav1.ListOptions{})
@@ -383,9 +388,9 @@ func (c *Configurator) getStorageClasses() (bool, error) {
 				// networkId not set
 				mustUpdate = true
 			} else {
-				if c.networkId == "" {
-					c.networkId = cl.Parameters["networkId"]
-				} else if c.networkId != cl.Parameters["networkId"] {
+				if c.networkID == "" {
+					c.networkID = cl.Parameters["networkId"]
+				} else if c.networkID != cl.Parameters["networkId"] {
 					// networkId not match between classes
 					mustUpdate = true
 				}
@@ -393,8 +398,8 @@ func (c *Configurator) getStorageClasses() (bool, error) {
 			// Do not read cidr from storageclasses
 		}
 	}
-	glog.V(5).Infof("Configurator : zone=%s networkID=%s", c.zone, c.networkId)
-	if c.zone == "" || c.networkId == "" {
+	glog.V(5).Infof("Configurator : zone=%s networkID=%s", c.zone, c.networkID)
+	if c.zone == "" || c.networkID == "" {
 		mustUpdate = true
 		glog.V(4).Infof("Configurator : storage classes must be updated")
 	}
@@ -413,11 +418,11 @@ func (c *Configurator) setStorageClasses() error {
 		if cl.Provisioner != c.driver.config.Name {
 			continue
 		}
-		if cl.Parameters["zone"] == c.zone || cl.Parameters["networkId"] == c.networkId {
+		if cl.Parameters["zone"] == c.zone || cl.Parameters["networkId"] == c.networkID {
 			continue
 		}
 		cl.Parameters["zone"] = c.zone
-		cl.Parameters["networkId"] = c.networkId
+		cl.Parameters["networkId"] = c.networkID
 		// Do not overwrite existing cidr
 		if c.cidr != "" && cl.Parameters["reservedIpv4Cidr"] == "" {
 			cl.Parameters["reservedIpv4Cidr"] = c.cidr
@@ -428,7 +433,8 @@ func (c *Configurator) setStorageClasses() error {
 		}
 		cl.SetResourceVersion("")
 		cl.SetUID("")
-		_, err = c.kubeClient.StorageV1().StorageClasses().Create(c.ctx, &cl, metav1.CreateOptions{})
+		copy := cl.DeepCopy()
+		_, err = c.kubeClient.StorageV1().StorageClasses().Create(c.ctx, copy, metav1.CreateOptions{})
 		if err != nil {
 			return fmt.Errorf("creating storageclass in SetStorageClasses : %s", err.Error())
 		}
@@ -469,7 +475,7 @@ func (c *Configurator) installStorageClasses() error {
 
 	// Create classes
 	newClass := &storagev1.StorageClass{
-		TypeMeta: metav1.TypeMeta{APIVersion: "storage.k8s.io/v1", Kind: "StorageClass"},
+		TypeMeta:    metav1.TypeMeta{APIVersion: "storage.k8s.io/v1", Kind: "StorageClass"},
 		Provisioner: c.driver.config.Name,
 	}
 	if standard {
@@ -586,6 +592,7 @@ func divideNet(cidr *net.IPNet, maskOffset int) ([]*net.IPNet, error) {
 	return divs, nil
 }
 
+// CidrDivs holds informations for dividing a network IP range
 type CidrDivs struct {
 	cidr       net.IPNet
 	maskOffset int
@@ -604,7 +611,7 @@ func newCidrDivs(cidr *net.IPNet, maskOffset int) (*CidrDivs, error) {
 	}, nil
 }
 
-func (d *CidrDivs) dump() {
+func (d *CidrDivs) dump() { //nolint:unused
 	fmt.Printf("--- divs : %d\n", len(d.divs))
 	for i, div := range d.divs {
 		fmt.Printf("%d : %s (%s - %s)\n", i, div.String(), startIP(div), endIP(div))
@@ -667,14 +674,14 @@ func isDevInRange(from, to net.IP, div *net.IPNet) bool {
 	return false
 }
 
-func (d *CidrDivs) dropWithIPRange(ip_from, ip_to string) error {
-	from := net.ParseIP(ip_from)
+func (d *CidrDivs) dropWithIPRange(ipFrom, ipTo string) error {
+	from := net.ParseIP(ipFrom)
 	if from == nil {
-		return fmt.Errorf("error parsing ip %s", ip_from)
+		return fmt.Errorf("error parsing ip %s", ipFrom)
 	}
-	to := net.ParseIP(ip_to)
+	to := net.ParseIP(ipTo)
 	if to == nil {
-		return fmt.Errorf("erro parsing ip %s", ip_to)
+		return fmt.Errorf("erro parsing ip %s", ipTo)
 	}
 	divFrom := -1
 	divTo := -1

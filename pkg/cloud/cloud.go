@@ -12,14 +12,15 @@ import (
 	"github.com/nifcloud/nifcloud-sdk-go/nifcloud"
 	"github.com/nifcloud/nifcloud-sdk-go/service/computing"
 	"github.com/nifcloud/nifcloud-sdk-go/service/computing/computingiface"
-	"github.com/nifcloud/nifcloud-sdk-go/service/nas"
-	"github.com/nifcloud/nifcloud-sdk-go/service/nas/nasiface"
 	"github.com/nifcloud/nifcloud-sdk-go/service/hatoba"
 	"github.com/nifcloud/nifcloud-sdk-go/service/hatoba/hatobaiface"
+	"github.com/nifcloud/nifcloud-sdk-go/service/nas"
+	"github.com/nifcloud/nifcloud-sdk-go/service/nas/nasiface"
 	"github.com/nifcloud/nifcloud-sdk-go/service/rdb"
 	"github.com/nifcloud/nifcloud-sdk-go/service/rdb/rdbiface"
 )
 
+// Interface for Cloud methods
 type Interface interface {
 	// nas
 	GetNasInstance(ctx context.Context, name string) (*nas.NASInstance, error)
@@ -28,8 +29,8 @@ type Interface interface {
 	ModifyNasInstance(ctx context.Context, name string) (*nas.NASInstance, error)
 	ChangeNasInstanceSecurityGroup(ctx context.Context, name, sgname string) (*nas.NASInstance, error)
 	DeleteNasInstance(ctx context.Context, name string) error
-	GenerateVolumeIdFromNasInstance(obj *nas.NASInstance) string
-	GetNasInstanceFromVolumeId(ctx context.Context, id string) (*nas.NASInstance, error)
+	GenerateVolumeIDFromNasInstance(obj *nas.NASInstance) string
+	GetNasInstanceFromVolumeID(ctx context.Context, id string) (*nas.NASInstance, error)
 	GetNasSecurityGroup(ctx context.Context, name string) (*nas.NASSecurityGroup, error)
 	CreateNasSecurityGroup(ctx context.Context, sc *nas.CreateNASSecurityGroupInput) (*nas.NASSecurityGroup, error)
 	AuthorizeCIDRIP(ctx context.Context, name, cidrip string) (*nas.NASSecurityGroup, error)
@@ -38,14 +39,15 @@ type Interface interface {
 	ListClusters(ctx context.Context) ([]hatoba.Cluster, error)
 	// computing
 	ListInstances(ctx context.Context) ([]computing.InstancesSet, error)
-	GetPrivateLan(ctx context.Context, networkId string) (*computing.PrivateLanSet, error)
-	GetDhcpStatus(ctx context.Context, networkId, routerId string) ([]computing.IpAddressPoolSet, []computing.DhcpIpAddressSet, error)
+	GetPrivateLan(ctx context.Context, networkID string) (*computing.PrivateLanSet, error)
+	GetDhcpStatus(ctx context.Context, networkID, routerID string) (
+		[]computing.IpAddressPoolSet, []computing.DhcpIpAddressSet, error)
 	// rdb
 	ListRdbInstances(ctx context.Context) ([]rdb.DBInstance, error)
 }
 
+// Cloud handles clients for nifcloud services
 type Cloud struct {
-	//Session *session.Session
 	Nas       nasiface.ClientAPI
 	Computing computingiface.ClientAPI
 	Hatoba    hatobaiface.ClientAPI
@@ -54,16 +56,17 @@ type Cloud struct {
 	DevEp     string
 }
 
+// NewCloud defines a new Cloud
 func NewCloud(region, devcloudep string) (*Cloud, error) {
 
 	// Get credentials
 	accesskey := os.Getenv("AWS_ACCESS_KEY_ID")
 	if accesskey == "" {
-		return nil, fmt.Errorf("Cannot set accesskey from env.")
+		return nil, fmt.Errorf("cannot set accesskey from env")
 	}
 	secretkey := os.Getenv("AWS_SECRET_ACCESS_KEY")
 	if secretkey == "" {
-		return nil, fmt.Errorf("Cannot set secretkey from env.")
+		return nil, fmt.Errorf("cannot set secretkey from env")
 	}
 
 	// Create config with credentials and region.
@@ -80,6 +83,7 @@ func NewCloud(region, devcloudep string) (*Cloud, error) {
 	}, nil
 }
 
+// GetNasInstance get an NASInstance by name
 func (c *Cloud) GetNasInstance(ctx context.Context, name string) (*nas.NASInstance, error) {
 	// Call describe NAS Instances
 	req := c.Nas.DescribeNASInstancesRequest(
@@ -94,6 +98,7 @@ func (c *Cloud) GetNasInstance(ctx context.Context, name string) (*nas.NASInstan
 	return &output.NASInstances[0], nil
 }
 
+// IsNotFoundErr determines 'NotFound' error or not
 func IsNotFoundErr(err error) bool {
 	if awsErr, ok := err.(awserr.Error); ok {
 		return strings.Contains(awsErr.Code(), "NotFound")
@@ -101,6 +106,7 @@ func IsNotFoundErr(err error) bool {
 	return false
 }
 
+// ListNasInstances get all NASInstances
 func (c *Cloud) ListNasInstances(ctx context.Context) ([]nas.NASInstance, error) {
 	// Call describe NAS Instances
 	req := c.Nas.DescribeNASInstancesRequest(&nas.DescribeNASInstancesInput{})
@@ -113,6 +119,7 @@ func (c *Cloud) ListNasInstances(ctx context.Context) ([]nas.NASInstance, error)
 	return output.NASInstances, nil
 }
 
+// CreateNasInstance creates a NASInstance
 func (c *Cloud) CreateNasInstance(ctx context.Context, n *nas.CreateNASInstanceInput) (*nas.NASInstance, error) {
 	// Call create NAS Instances
 	req := c.Nas.CreateNASInstanceRequest(n)
@@ -124,11 +131,12 @@ func (c *Cloud) CreateNasInstance(ctx context.Context, n *nas.CreateNASInstanceI
 	return output.NASInstance, nil
 }
 
+// ModifyNasInstance set NoRootSquash=true of a NASInstance
 func (c *Cloud) ModifyNasInstance(ctx context.Context, name string) (*nas.NASInstance, error) {
 	// Call modify NAS Instance to set NoRootSquash=true
-	no_root_squash := "true"
+	noRootSquash := "true"
 	req := c.Nas.ModifyNASInstanceRequest(
-		&nas.ModifyNASInstanceInput{NASInstanceIdentifier: &name, NoRootSquash: &no_root_squash},
+		&nas.ModifyNASInstanceInput{NASInstanceIdentifier: &name, NoRootSquash: &noRootSquash},
 	)
 
 	output, err := req.Send(ctx)
@@ -138,6 +146,7 @@ func (c *Cloud) ModifyNasInstance(ctx context.Context, name string) (*nas.NASIns
 	return output.NASInstance, nil
 }
 
+// ChangeNasInstanceSecurityGroup changes SecurityGroup of a NASInstance
 func (c *Cloud) ChangeNasInstanceSecurityGroup(ctx context.Context, name, sgname string) (*nas.NASInstance, error) {
 	// Call modify NAS Instance to set NasSecurityGroups
 	sgs := []string{sgname}
@@ -152,6 +161,7 @@ func (c *Cloud) ChangeNasInstanceSecurityGroup(ctx context.Context, name, sgname
 	return output.NASInstance, nil
 }
 
+// DeleteNasInstance deletes a NASInstance
 func (c *Cloud) DeleteNasInstance(ctx context.Context, name string) error {
 	// Call delete NAS Instances
 	req := c.Nas.DeleteNASInstanceRequest(
@@ -165,16 +175,16 @@ func (c *Cloud) DeleteNasInstance(ctx context.Context, name string) error {
 	return nil
 }
 
-// getVolumeIdFromFileInstance generates an id to uniquely identify the nifcloud NAS.
-// This id is used for volume deletion.
-func (c *Cloud) GenerateVolumeIdFromNasInstance(obj *nas.NASInstance) string {
+// GenerateVolumeIDFromNasInstance generates VolumeID for a NASInstance
+func (c *Cloud) GenerateVolumeIDFromNasInstance(obj *nas.NASInstance) string {
 	idElements := make([]string, 0)
 	idElements = append(idElements, c.Region)
 	idElements = append(idElements, *obj.NASInstanceIdentifier)
 	return strings.Join(idElements, "/")
 }
 
-func (c *Cloud) GetNasInstanceFromVolumeId(ctx context.Context, id string) (*nas.NASInstance, error) {
+// GetNasInstanceFromVolumeID gets a NASInstance by VolumeID
+func (c *Cloud) GetNasInstanceFromVolumeID(ctx context.Context, id string) (*nas.NASInstance, error) {
 	tokens := strings.Split(id, "/")
 	if len(tokens) != 2 {
 		return nil, fmt.Errorf("volume id %q unexpected format: got %v tokens", id, len(tokens))
@@ -185,6 +195,7 @@ func (c *Cloud) GetNasInstanceFromVolumeId(ctx context.Context, id string) (*nas
 
 // NasSecurityGroups functions
 
+// GetNasSecurityGroup gets a NasSecurityGroup
 func (c *Cloud) GetNasSecurityGroup(ctx context.Context, name string) (*nas.NASSecurityGroup, error) {
 	// Call describe NAS Security Groups
 	req := c.Nas.DescribeNASSecurityGroupsRequest(
@@ -198,7 +209,9 @@ func (c *Cloud) GetNasSecurityGroup(ctx context.Context, name string) (*nas.NASS
 	return &output.NASSecurityGroups[0], nil
 }
 
-func (c *Cloud) CreateNasSecurityGroup(ctx context.Context, sc *nas.CreateNASSecurityGroupInput) (*nas.NASSecurityGroup, error) {
+// CreateNasSecurityGroup creats a NasSecurityGroup
+func (c *Cloud) CreateNasSecurityGroup(
+	ctx context.Context, sc *nas.CreateNASSecurityGroupInput) (*nas.NASSecurityGroup, error) {
 	// Call create NAS Instances
 	req := c.Nas.CreateNASSecurityGroupRequest(sc)
 
@@ -209,6 +222,7 @@ func (c *Cloud) CreateNasSecurityGroup(ctx context.Context, sc *nas.CreateNASSec
 	return output.NASSecurityGroup, nil
 }
 
+// AuthorizeCIDRIP authorizes a cidr IP to a NasSecurityGroup
 func (c *Cloud) AuthorizeCIDRIP(ctx context.Context, name, cidrip string) (*nas.NASSecurityGroup, error) {
 	// Call authorize NAS Security Groups ingress
 	req := c.Nas.AuthorizeNASSecurityGroupIngressRequest(
@@ -222,6 +236,7 @@ func (c *Cloud) AuthorizeCIDRIP(ctx context.Context, name, cidrip string) (*nas.
 	return output.NASSecurityGroup, nil
 }
 
+// RevokeCIDRIP revokes a cidr IP from a NasSecurityGroup
 func (c *Cloud) RevokeCIDRIP(ctx context.Context, name, cidrip string) (*nas.NASSecurityGroup, error) {
 	// Call revoke NAS Security Groups ingress
 	req := c.Nas.RevokeNASSecurityGroupIngressRequest(
@@ -237,6 +252,7 @@ func (c *Cloud) RevokeCIDRIP(ctx context.Context, name, cidrip string) (*nas.NAS
 
 // hatoba
 
+// ListClusters gets all Clusters
 func (c *Cloud) ListClusters(ctx context.Context) ([]hatoba.Cluster, error) {
 	// Call list clusters
 	req := c.Hatoba.ListClustersRequest(&hatoba.ListClustersInput{})
@@ -259,6 +275,7 @@ func (c *Cloud) ListClusters(ctx context.Context) ([]hatoba.Cluster, error) {
 
 // computing
 
+// ListInstances gets all Instnces
 func (c *Cloud) ListInstances(ctx context.Context) ([]computing.InstancesSet, error) {
 	// Call describe Instances
 	req := c.Computing.DescribeInstancesRequest(&computing.DescribeInstancesInput{})
@@ -273,10 +290,11 @@ func (c *Cloud) ListInstances(ctx context.Context) ([]computing.InstancesSet, er
 	return instances, nil
 }
 
-func (c *Cloud) GetPrivateLan(ctx context.Context, networkId string) (*computing.PrivateLanSet, error) {
+// GetPrivateLan gets a PrivateLan by networkID
+func (c *Cloud) GetPrivateLan(ctx context.Context, networkID string) (*computing.PrivateLanSet, error) {
 	// Call NiftyDescribePrivateLans
-	req := c.Computing. NiftyDescribePrivateLansRequest(&computing.NiftyDescribePrivateLansInput{
-		NetworkId: []string{networkId},
+	req := c.Computing.NiftyDescribePrivateLansRequest(&computing.NiftyDescribePrivateLansInput{
+		NetworkId: []string{networkID},
 	})
 	output, err := req.Send(ctx)
 	if err != nil {
@@ -285,12 +303,13 @@ func (c *Cloud) GetPrivateLan(ctx context.Context, networkId string) (*computing
 	return &output.PrivateLanSet[0], nil
 }
 
-func (c *Cloud) GetDhcpStatus(ctx context.Context, networkId, routerId string) (
+// GetDhcpStatus gets IpAddressPoolSet and DhcpIpAddressSet of a PrivateLan
+func (c *Cloud) GetDhcpStatus(ctx context.Context, networkID, routerID string) (
 	[]computing.IpAddressPoolSet, []computing.DhcpIpAddressSet, error) {
 
 	// Call NiftyDescribeDhcpStatus
-	req := c.Computing. NiftyDescribeDhcpStatusRequest(&computing.NiftyDescribeDhcpStatusInput{
-		RouterId: &routerId,
+	req := c.Computing.NiftyDescribeDhcpStatusRequest(&computing.NiftyDescribeDhcpStatusInput{
+		RouterId: &routerID,
 	})
 	output, err := req.Send(ctx)
 	if err != nil {
@@ -299,7 +318,7 @@ func (c *Cloud) GetDhcpStatus(ctx context.Context, networkId, routerId string) (
 	pools := []computing.IpAddressPoolSet{}
 	ips := []computing.DhcpIpAddressSet{}
 	for _, i := range output.DhcpStatusInformationSet {
-		if *i.NetworkId != networkId {
+		if *i.NetworkId != networkID {
 			continue
 		}
 		pools = append(pools, i.DhcpIpAddressInformation.IpAddressPoolSet...)
@@ -314,6 +333,7 @@ func (c *Cloud) GetDhcpStatus(ctx context.Context, networkId, routerId string) (
 
 // rdb
 
+// ListRdbInstances gets all RDBs
 func (c *Cloud) ListRdbInstances(ctx context.Context) ([]rdb.DBInstance, error) {
 	// Call list DB Instances
 	req := c.Rdb.DescribeDBInstancesRequest(&rdb.DescribeDBInstancesInput{})

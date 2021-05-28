@@ -17,7 +17,6 @@ limitations under the License.
 package driver
 
 import (
-	"flag"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -27,10 +26,10 @@ import (
 
 	csi "github.com/container-storage-interface/spec/lib/go/csi"
 	"golang.org/x/net/context"
-	"k8s.io/utils/mount"
-	"k8s.io/apimachinery/pkg/runtime"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
+	"k8s.io/utils/mount"
 )
 
 var (
@@ -43,10 +42,10 @@ var (
 		},
 	}
 	testVolumeAttributes = map[string]string{
-		attrIp:     "1.1.1.1",
+		attrIP:         "1.1.1.1",
 		attrSourcePath: "test-volume",
 	}
-	testDevice = "1.1.1.1:/test-volume"
+	testDevice   = "1.1.1.1:/test-volume"
 	testVolumeID = "testregion/pvc-TESTPVCID"
 )
 
@@ -80,7 +79,12 @@ func TestNodePublishVolume(t *testing.T) {
 	if err = os.MkdirAll(testTargetPathAlreadyExists, defaultPerm); err != nil {
 		t.Fatalf("failed to setup target path: %v", err)
 	}
-	defer os.RemoveAll(base)
+	defer func() {
+		err := os.RemoveAll(base)
+		if err != nil {
+			t.Fatalf("failed to remove testdir: %v", err)
+		}
+	}()
 
 	cases := []struct {
 		name          string
@@ -143,11 +147,12 @@ func TestNodePublishVolume(t *testing.T) {
 						Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
 					},
 				},
-				VolumeContext:    testVolumeAttributes,
+				VolumeContext: testVolumeAttributes,
 			},
 			actions: []mount.FakeAction{{Action: mount.FakeActionMount}},
 
-			expectedMount: &mount.MountPoint{Device: testDevice, Path: testTargetPath, Type: "nfs", Opts: []string{"foo", "bar"}},
+			expectedMount: &mount.MountPoint{
+				Device: testDevice, Path: testTargetPath, Type: "nfs", Opts: []string{"foo", "bar"}},
 		},
 		{
 			name: "valid request read only",
@@ -173,18 +178,18 @@ func TestNodePublishVolume(t *testing.T) {
 		{
 			name: "invalid volume capability",
 			req: &csi.NodePublishVolumeRequest{
-				VolumeId:         testVolumeID,
-				TargetPath:       testTargetPath,
-				VolumeContext:    testVolumeAttributes,
+				VolumeId:      testVolumeID,
+				TargetPath:    testTargetPath,
+				VolumeContext: testVolumeAttributes,
 			},
 			expectErr: true,
 		},
 		{
 			name: "invalid volume attribute",
 			req: &csi.NodePublishVolumeRequest{
-				VolumeId:         testVolumeID,
-				TargetPath:       testTargetPath,
-				VolumeContext:    testVolumeAttributes,
+				VolumeId:      testVolumeID,
+				TargetPath:    testTargetPath,
+				VolumeContext: testVolumeAttributes,
 			},
 			expectErr: true,
 		},
@@ -223,7 +228,12 @@ func TestNodeUnpublishVolume(t *testing.T) {
 	if err = os.MkdirAll(testTargetPath, defaultPerm); err != nil {
 		t.Fatalf("failed to setup target path: %v", err)
 	}
-	defer os.RemoveAll(base)
+	defer func() {
+		err := os.RemoveAll(base)
+		if err != nil {
+			t.Fatalf("failed to remove testdir: %v", err)
+		}
+	}()
 
 	cases := []struct {
 		name          string
@@ -296,7 +306,7 @@ func TestValidateVolumeAttributes(t *testing.T) {
 		{
 			name: "valid attributes",
 			attrs: map[string]string{
-				attrIp:     "1.1.1.1",
+				attrIP:         "1.1.1.1",
 				attrSourcePath: "vol1",
 			},
 		},
@@ -310,7 +320,7 @@ func TestValidateVolumeAttributes(t *testing.T) {
 		{
 			name: "invalid volume",
 			attrs: map[string]string{
-				attrIp: "1.1.1.1",
+				attrIP: "1.1.1.1",
 			},
 			expectErr: true,
 		},
@@ -359,15 +369,20 @@ func TestNodeGetVolumeStats(t *testing.T) {
 			},
 		},
 	}
-	defer os.RemoveAll(base)
+	defer func() {
+		err := os.RemoveAll(base)
+		if err != nil {
+			t.Fatalf("failed to remove testdir: %v", err)
+		}
+	}()
 
 	cases := []struct {
-		name          string
-		req           *csi.NodeGetVolumeStatsRequest
-		expectErr     bool
+		name      string
+		req       *csi.NodeGetVolumeStatsRequest
+		expectErr bool
 	}{
 		{
-			name:   "successful",
+			name: "successful",
 			req: &csi.NodeGetVolumeStatsRequest{
 				VolumeId:   testVolumeID,
 				VolumePath: testVolumePath,
@@ -410,8 +425,7 @@ func TestNodeGetVolumeStats(t *testing.T) {
 
 func TestRegisterNodePrivateIP(t *testing.T) {
 	// log
-	flag.Set("logtostderr", "true")
-	flag.Parse()
+	flagVSet("4")
 
 	// test k8s
 	kubeobjects := []runtime.Object{}
@@ -426,11 +440,11 @@ func TestRegisterNodePrivateIP(t *testing.T) {
 		KubeClient:    kubeClient,
 		PrivateIfName: "lo",
 		InitBackoff:   1,
-		PrivateIpReg:  true,
+		PrivateIPReg:  true,
 	}
 
 	driver, _ := NewNifcloudNasDriver(config)
-	go func(){
+	go func() {
 		driver.Run("unix:/tmp/csi.sock")
 	}()
 	time.Sleep(time.Duration(2) * time.Second)

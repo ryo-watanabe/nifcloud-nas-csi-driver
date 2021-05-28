@@ -2,60 +2,59 @@ package driver
 
 import (
 	"fmt"
-	"flag"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/kubernetes"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 
-	"golang.org/x/net/context"
 	"github.com/aws/aws-sdk-go-v2/aws/awserr"
 	"github.com/nifcloud/nifcloud-sdk-go/service/computing"
 	"github.com/nifcloud/nifcloud-sdk-go/service/hatoba"
 	"github.com/nifcloud/nifcloud-sdk-go/service/rdb"
+	"golang.org/x/net/context"
 )
 
 func TestConfigurator(t *testing.T) {
 
 	cases := map[string]struct {
 		instances []computing.InstancesSet
-		nodes []hatoba.Node
-		network_id string
-		pre_obj []runtime.Object
-		lan_cidr string
-		router_id string
-		db_ip string
-		pool_start string
-		pool_stop string
-		dhcp_ips []string
-		errmsg string
-		actions []string
-		post_conf *Configurator
-		update bool
+		nodes     []hatoba.Node
+		networkID string
+		preObj    []runtime.Object
+		lanCidr   string
+		routerID  string
+		dbIP      string
+		poolStart string
+		poolStop  string
+		dhcpIps   []string
+		errmsg    string
+		actions   []string
+		postConf  *Configurator
+		update    bool
 	}{
-		"init private LAN":{
+		"init private LAN": {
 			instances: []computing.InstancesSet{
 				initInstance("111.0.0.1", "192.168.0.1", "net-TestPrivate", "testZone"),
 				initInstance("111.0.0.2", "192.168.0.2", "net-TestPrivate", "testZone"),
 			},
-			network_id: "net-TestPrivate",
-			lan_cidr: "192.168.0.0/16",
-			router_id: "testRouterId",
-			db_ip: "192.168.200.1",
-			pool_start: "192.168.10.1",
-			pool_stop: "192.168.10.254",
-			dhcp_ips: []string{
+			networkID: "net-TestPrivate",
+			lanCidr:   "192.168.0.0/16",
+			routerID:  "testRouterId",
+			dbIP:      "192.168.200.1",
+			poolStart: "192.168.10.1",
+			poolStop:  "192.168.10.254",
+			dhcpIps: []string{
 				"192.168.100.1",
 				"192.168.100.2",
 				"192.168.100.3",
 			},
-			pre_obj: []runtime.Object{
+			preObj: []runtime.Object{
 				newNode("testNodeID1", "111.0.0.1", ""),
 				newNode("testNodeID2", "111.0.0.2", ""),
 				newCSINode("testNodeID1", ""),
@@ -69,9 +68,9 @@ func TestConfigurator(t *testing.T) {
 				"ListRdbInstances",
 				"GetDhcpStatus/net-TestPrivate/testRouterId",
 			},
-			post_conf: &Configurator{
-				networkId: "net-TestPrivate",
-				zone: "testZone",
+			postConf: &Configurator{
+				networkID: "net-TestPrivate",
+				zone:      "testZone",
 				nodes: []NodeConfig{
 					NodeConfig{name: "testNodeID1", publicIP: "111.0.0.1", privateIP: "192.168.0.1"},
 					NodeConfig{name: "testNodeID2", publicIP: "111.0.0.2", privateIP: "192.168.0.2"},
@@ -79,12 +78,12 @@ func TestConfigurator(t *testing.T) {
 				cidr: "192.168.128.0/20",
 			},
 		},
-		"init common private":{
+		"init common private": {
 			instances: []computing.InstancesSet{
 				initInstance("111.0.0.1", "10.100.0.1", "net-COMMON_PRIVATE", "testZone"),
 				initInstance("111.0.0.2", "10.100.0.2", "net-COMMON_PRIVATE", "testZone"),
 			},
-			pre_obj: []runtime.Object{
+			preObj: []runtime.Object{
 				newNode("testNodeID1", "111.0.0.1", ""),
 				newNode("testNodeID2", "111.0.0.2", ""),
 				newCSINode("testNodeID1", ""),
@@ -95,9 +94,9 @@ func TestConfigurator(t *testing.T) {
 				"ListClusters",
 				"ListInstances",
 			},
-			post_conf: &Configurator{
-				networkId: "net-COMMON_PRIVATE",
-				zone: "testZone",
+			postConf: &Configurator{
+				networkID: "net-COMMON_PRIVATE",
+				zone:      "testZone",
 				nodes: []NodeConfig{
 					NodeConfig{name: "testNodeID1", publicIP: "111.0.0.1", privateIP: "10.100.0.1"},
 					NodeConfig{name: "testNodeID2", publicIP: "111.0.0.2", privateIP: "10.100.0.2"},
@@ -105,17 +104,17 @@ func TestConfigurator(t *testing.T) {
 				cidr: "",
 			},
 		},
-		"init hatoba private LAN":{
+		"init hatoba private LAN": {
 			nodes: []hatoba.Node{
 				initNode("111.0.0.1", "192.168.0.1", "testZone"),
 				initNode("111.0.0.2", "192.168.0.2", "testZone"),
 			},
-			network_id: "net-TestPrivate",
-			lan_cidr: "192.168.0.0/24",
-			router_id: "testRouterId",
-			pool_start: "192.168.0.64",
-			pool_stop: "192.168.0.127",
-			pre_obj: []runtime.Object{
+			networkID: "net-TestPrivate",
+			lanCidr:   "192.168.0.0/24",
+			routerID:  "testRouterId",
+			poolStart: "192.168.0.64",
+			poolStop:  "192.168.0.127",
+			preObj: []runtime.Object{
 				newNode("testNodeID1", "111.0.0.1", ""),
 				newNode("testNodeID2", "111.0.0.2", ""),
 				newCSINode("testNodeID1", ""),
@@ -128,9 +127,9 @@ func TestConfigurator(t *testing.T) {
 				"ListRdbInstances",
 				"GetDhcpStatus/net-TestPrivate/testRouterId",
 			},
-			post_conf: &Configurator{
-				networkId: "net-TestPrivate",
-				zone: "testZone",
+			postConf: &Configurator{
+				networkID: "net-TestPrivate",
+				zone:      "testZone",
 				nodes: []NodeConfig{
 					NodeConfig{name: "testNodeID1", publicIP: "111.0.0.1", privateIP: "192.168.0.1"},
 					NodeConfig{name: "testNodeID2", publicIP: "111.0.0.2", privateIP: "192.168.0.2"},
@@ -138,16 +137,16 @@ func TestConfigurator(t *testing.T) {
 				cidr: "192.168.0.160/27",
 			},
 		},
-		"not found" : {
+		"not found": {
 			errmsg: "nodes not found in computing / hatoba",
 		},
-		"private LAN not found":{
+		"private LAN not found": {
 			nodes: []hatoba.Node{
 				initNode("111.0.0.1", "192.168.0.1", "testZone"),
 				initNode("111.0.0.2", "192.168.0.2", "testZone"),
 			},
-			network_id: "net-NotFound",
-			pre_obj: []runtime.Object{
+			networkID: "net-NotFound",
+			preObj: []runtime.Object{
 				newNode("testNodeID1", "111.0.0.1", ""),
 				newNode("testNodeID2", "111.0.0.2", ""),
 				newCSINode("testNodeID1", ""),
@@ -156,33 +155,33 @@ func TestConfigurator(t *testing.T) {
 			},
 			errmsg: "getting private lan net-NotFound : TestAwsErrorNotFound",
 		},
-		"update nothing changed":{
+		"update nothing changed": {
 			update: true,
-			pre_obj: []runtime.Object{
+			preObj: []runtime.Object{
 				newNode("testNodeID1", "111.0.0.1", ""),
 				newNode("testNodeID2", "111.0.0.2", ""),
 				newCSINode("testNodeID1", "192.168.0.1"),
 				newCSINode("testNodeID2", "192.168.0.2"),
 				newStorageClass("testStorageClass", "testZone", "net-TestPrivate", "192.168.0.160/27"),
 			},
-			post_conf: &Configurator{
-				networkId: "net-TestPrivate",
-				zone: "testZone",
+			postConf: &Configurator{
+				networkID: "net-TestPrivate",
+				zone:      "testZone",
 				nodes: []NodeConfig{
 					NodeConfig{name: "testNodeID1", publicIP: "111.0.0.1", privateIP: "192.168.0.1"},
 					NodeConfig{name: "testNodeID2", publicIP: "111.0.0.2", privateIP: "192.168.0.2"},
 				},
 			},
 		},
-		"update node added":{
+		"update node added": {
 			update: true,
 			nodes: []hatoba.Node{
 				initNode("111.0.0.1", "192.168.0.1", "testZone"),
 				initNode("111.0.0.2", "192.168.0.2", "testZone"),
 				initNode("111.0.0.3", "192.168.0.3", "testZone"),
 			},
-			network_id: "net-TestPrivate",
-			pre_obj: []runtime.Object{
+			networkID: "net-TestPrivate",
+			preObj: []runtime.Object{
 				newNode("testNodeID1", "111.0.0.1", ""),
 				newNode("testNodeID2", "111.0.0.2", ""),
 				newNode("testNodeID3", "111.0.0.3", ""),
@@ -194,9 +193,9 @@ func TestConfigurator(t *testing.T) {
 			actions: []string{
 				"ListClusters",
 			},
-			post_conf: &Configurator{
-				networkId: "net-TestPrivate",
-				zone: "testZone",
+			postConf: &Configurator{
+				networkID: "net-TestPrivate",
+				zone:      "testZone",
 				nodes: []NodeConfig{
 					NodeConfig{name: "testNodeID1", publicIP: "111.0.0.1", privateIP: "192.168.0.1"},
 					NodeConfig{name: "testNodeID2", publicIP: "111.0.0.2", privateIP: "192.168.0.2"},
@@ -204,14 +203,14 @@ func TestConfigurator(t *testing.T) {
 				},
 			},
 		},
-		"update zone/networkId different between classes":{
+		"update zone/networkId different between classes": {
 			update: true,
 			nodes: []hatoba.Node{
 				initNode("111.0.0.1", "192.168.0.1", "testZone"),
 				initNode("111.0.0.2", "192.168.0.2", "testZone"),
 			},
-			network_id: "net-COMMON_PRIVATE",
-			pre_obj: []runtime.Object{
+			networkID: "net-COMMON_PRIVATE",
+			preObj: []runtime.Object{
 				newNode("testNodeID1", "111.0.0.1", ""),
 				newNode("testNodeID2", "111.0.0.2", ""),
 				newCSINode("testNodeID1", "192.168.0.1"),
@@ -222,23 +221,23 @@ func TestConfigurator(t *testing.T) {
 			actions: []string{
 				"ListClusters",
 			},
-			post_conf: &Configurator{
-				networkId: "net-COMMON_PRIVATE",
-				zone: "testZone",
+			postConf: &Configurator{
+				networkID: "net-COMMON_PRIVATE",
+				zone:      "testZone",
 				nodes: []NodeConfig{
 					NodeConfig{name: "testNodeID1", publicIP: "111.0.0.1", privateIP: "192.168.0.1"},
 					NodeConfig{name: "testNodeID2", publicIP: "111.0.0.2", privateIP: "192.168.0.2"},
 				},
 			},
 		},
-		"init cidr block too small":{
+		"init cidr block too small": {
 			nodes: []hatoba.Node{
 				initNode("111.0.0.1", "192.168.0.1", "testZone"),
 				initNode("111.0.0.2", "192.168.0.2", "testZone"),
 			},
-			network_id: "net-TestPrivate",
-			lan_cidr: "192.168.0.0/28",
-			pre_obj: []runtime.Object{
+			networkID: "net-TestPrivate",
+			lanCidr:   "192.168.0.0/28",
+			preObj: []runtime.Object{
 				newNode("testNodeID1", "111.0.0.1", ""),
 				newNode("testNodeID2", "111.0.0.2", ""),
 				newCSINode("testNodeID1", ""),
@@ -247,22 +246,22 @@ func TestConfigurator(t *testing.T) {
 			},
 			errmsg: "initialing recommended cidr divs : mask offset must be positive value",
 		},
-		"init cannot determine cidr":{
+		"init cannot determine cidr": {
 			nodes: []hatoba.Node{
 				initNode("111.0.0.1", "192.168.0.1", "testZone"),
 				initNode("111.0.0.2", "192.168.0.2", "testZone"),
 			},
-			network_id: "net-TestPrivate",
-			lan_cidr: "192.168.0.0/24",
-			router_id: "testRouterId",
-			pool_start: "192.168.0.32",
-			pool_stop: "192.168.0.127",
-			db_ip: "192.168.0.130",
-			dhcp_ips: []string{
+			networkID: "net-TestPrivate",
+			lanCidr:   "192.168.0.0/24",
+			routerID:  "testRouterId",
+			poolStart: "192.168.0.32",
+			poolStop:  "192.168.0.127",
+			dbIP:      "192.168.0.130",
+			dhcpIps: []string{
 				"192.168.0.161",
 				"192.168.0.193",
 			},
-			pre_obj: []runtime.Object{
+			preObj: []runtime.Object{
 				newNode("testNodeID1", "111.0.0.1", ""),
 				newNode("testNodeID2", "111.0.0.2", ""),
 				newCSINode("testNodeID1", ""),
@@ -275,18 +274,18 @@ func TestConfigurator(t *testing.T) {
 				"ListRdbInstances",
 				"GetDhcpStatus/net-TestPrivate/testRouterId",
 			},
-			post_conf: &Configurator{
-				networkId: "net-TestPrivate",
-				zone: "testZone",
+			postConf: &Configurator{
+				networkID: "net-TestPrivate",
+				zone:      "testZone",
 				nodes: []NodeConfig{
 					NodeConfig{name: "testNodeID1", publicIP: "111.0.0.1", privateIP: "192.168.0.1"},
 					NodeConfig{name: "testNodeID2", publicIP: "111.0.0.2", privateIP: "192.168.0.2"},
 				},
 			},
 		},
-		"nodes without public IPs":{
+		"nodes without public IPs": {
 			update: true,
-			pre_obj: []runtime.Object{
+			preObj: []runtime.Object{
 				newNode("testNodeID1", "10.100.0.1", "172.20.0.1"),
 				newNode("testNodeID2", "10.100.0.2", "172.20.0.2"),
 				newCSINode("testNodeID1", "172.20.0.1"),
@@ -297,22 +296,20 @@ func TestConfigurator(t *testing.T) {
 		},
 	}
 
-	flag.Set("logtostderr", "true")
-	flag.Lookup("v").Value.Set("5")
-	flag.Parse()
+	flagVSet("5")
 
-	for name, c := range(cases) {
+	for name, c := range cases {
 		t.Logf("====== Test case [%s] :", name)
 
-		conf, _, cloud := initTestConfigurator(t, c.pre_obj)
+		conf, _, cloud := initTestConfigurator(t, c.preObj)
 		cloud.Instances = c.instances
-		initCluster("testCluster", c.network_id, c.nodes)
-		cidrBlock = c.lan_cidr
-		routerId = c.router_id
-		poolStart = c.pool_start
-		poolStop = c.pool_stop
-		setDhcpIpAddresses(c.dhcp_ips)
-		initDB(c.db_ip, c.network_id)
+		initCluster("testCluster", c.networkID, c.nodes)
+		cidrBlock = c.lanCidr
+		routerID = c.routerID
+		poolStart = c.poolStart
+		poolStop = c.poolStop
+		setDhcpIPAddresses(c.dhcpIps)
+		initDB(c.dbIP, c.networkID)
 
 		var err error
 		if c.update {
@@ -328,11 +325,11 @@ func TestConfigurator(t *testing.T) {
 				if !reflect.DeepEqual(c.actions, cloud.Actions) {
 					t.Errorf("cloud action not matched in case [%s]\nexpected : %v\nbut got  : %v", name, c.actions, cloud.Actions)
 				}
-				chkConfig(t, c.post_conf, conf, name)
+				chkConfig(t, c.postConf, conf, name)
 			}
 		} else {
 			if err == nil {
-				t.Errorf("expected error not occured in case [%s]\nexpected : %s", name, c.errmsg)
+				t.Errorf("expected error not occurred in case [%s]\nexpected : %s", name, c.errmsg)
 			} else if !strings.Contains(err.Error(), c.errmsg) {
 				t.Errorf("error message not matched in case [%s]\nmust contains : %s\nbut got : %s", name, c.errmsg, err.Error())
 			}
@@ -342,9 +339,7 @@ func TestConfigurator(t *testing.T) {
 
 func TestRunConfigurator(t *testing.T) {
 	// log
-	flag.Set("logtostderr", "true")
-	flag.Lookup("v").Value.Set("5")
-	flag.Parse()
+	flagVSet("5")
 
 	// test k8s
 	kubeobjects := []runtime.Object{
@@ -377,21 +372,21 @@ func TestRunConfigurator(t *testing.T) {
 	}
 
 	driver, _ := NewNifcloudNasDriver(config)
-	go func(){
+	go func() {
 		driver.Run("unix:/tmp/csi.sock")
 	}()
 	time.Sleep(time.Duration(2) * time.Second)
 	driver.Stop()
 
 	// check cloud actions
-	exp_actions := []string{
+	expActions := []string{
 		"ListClusters",
 		"GetNasSecurityGroup/cluster-TESTCLUSTERUID",
 		"CreateNasSecurityGroup/cluster-TESTCLUSTERUID",
 		"AuthorizeCIDRIP/cluster-TESTCLUSTERUID/192.168.0.1/32",
 	}
-	if !reflect.DeepEqual(exp_actions, cloud.Actions) {
-		t.Errorf("cloud action not matched\nexpected : %v\nbut got  : %v", exp_actions, cloud.Actions)
+	if !reflect.DeepEqual(expActions, cloud.Actions) {
+		t.Errorf("cloud action not matched\nexpected : %v\nbut got  : %v", expActions, cloud.Actions)
 	}
 
 	// check storage class parameters
@@ -421,8 +416,8 @@ func initTestConfigurator(t *testing.T, obj []runtime.Object) (*Configurator, ku
 }
 
 func chkConfig(t *testing.T, exp, got *Configurator, name string) {
-	if exp.networkId != got.networkId {
-		t.Errorf("networkId not matched in case [%s] exp:%s but got:%s", name, exp.networkId, got.networkId)
+	if exp.networkID != got.networkID {
+		t.Errorf("networkId not matched in case [%s] exp:%s but got:%s", name, exp.networkID, got.networkID)
 	}
 	if exp.zone != got.zone {
 		t.Errorf("zone not matched in case [%s] exp:%s but got:%s", name, exp.zone, got.zone)
@@ -437,12 +432,12 @@ func chkConfig(t *testing.T, exp, got *Configurator, name string) {
 
 func newNode(name, external, internal string) *corev1.Node {
 	node := &corev1.Node{
-		TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Node"},
+		TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "Node"},
 		ObjectMeta: metav1.ObjectMeta{Name: name},
 		Status: corev1.NodeStatus{
 			Addresses: []corev1.NodeAddress{
 				corev1.NodeAddress{
-					Type: corev1.NodeExternalIP,
+					Type:    corev1.NodeExternalIP,
 					Address: external,
 				},
 			},
@@ -450,27 +445,27 @@ func newNode(name, external, internal string) *corev1.Node {
 	}
 	if external != "" {
 		node.Status.Addresses = append(node.Status.Addresses, corev1.NodeAddress{
-			Type: corev1.NodeExternalIP,
+			Type:    corev1.NodeExternalIP,
 			Address: external,
 		})
 	}
 	if internal != "" {
 		node.Status.Addresses = append(node.Status.Addresses, corev1.NodeAddress{
-			Type: corev1.NodeInternalIP,
+			Type:    corev1.NodeInternalIP,
 			Address: internal,
 		})
 	}
 	return node
 }
 
-func initInstance(ip, privateIp, networkId, zone string) computing.InstancesSet {
+func initInstance(ip, privateIP, networkID, zone string) computing.InstancesSet {
 	return computing.InstancesSet{
-		IpAddress: &ip,
-		PrivateIpAddress: &privateIp,
+		IpAddress:        &ip,
+		PrivateIpAddress: &privateIP,
 		NetworkInterfaceSet: []computing.NetworkInterfaceSetOfDescribeInstances{
 			computing.NetworkInterfaceSetOfDescribeInstances{
-				NiftyNetworkId: &networkId,
-				PrivateIpAddress: &privateIp,
+				NiftyNetworkId:   &networkID,
+				PrivateIpAddress: &privateIP,
 			},
 		},
 		Placement: &computing.Placement{
@@ -479,10 +474,10 @@ func initInstance(ip, privateIp, networkId, zone string) computing.InstancesSet 
 	}
 }
 
-func initNode(publicIp, privateIp, zone string) hatoba.Node {
+func initNode(publicIP, privateIP, zone string) hatoba.Node {
 	return hatoba.Node{
-		PublicIpAddress: &publicIp,
-		PrivateIpAddress: &privateIp,
+		PublicIpAddress:  &publicIP,
+		PrivateIpAddress: &privateIP,
 		AvailabilityZone: &zone,
 	}
 }
@@ -491,12 +486,12 @@ func initNode(publicIp, privateIp, zone string) hatoba.Node {
 
 var clusters []hatoba.Cluster
 
-func initCluster(name, networkId string, nodes []hatoba.Node) {
+func initCluster(name, networkID string, nodes []hatoba.Node) {
 	clusters = []hatoba.Cluster{}
 	if len(nodes) > 0 {
 		clusters = append(clusters, hatoba.Cluster{
-			Name: &name,
-			NetworkConfig: &hatoba.NetworkConfig{NetworkId: &networkId},
+			Name:          &name,
+			NetworkConfig: &hatoba.NetworkConfig{NetworkId: &networkID},
 			NodePools: []hatoba.NodePool{
 				hatoba.NodePool{Nodes: nodes},
 			},
@@ -516,56 +511,56 @@ func (c *FakeCloud) ListInstances(ctx context.Context) ([]computing.InstancesSet
 	return c.Instances, nil
 }
 
-var cidrBlock, routerId string
+var cidrBlock, routerID string
 
-func (c *FakeCloud) GetPrivateLan(ctx context.Context, networkId string) (*computing.PrivateLanSet, error) {
-	c.Actions = append(c.Actions, "GetPrivateLan/" + networkId)
-	if networkId == "net-TestPrivate" {
+func (c *FakeCloud) GetPrivateLan(ctx context.Context, networkID string) (*computing.PrivateLanSet, error) {
+	c.Actions = append(c.Actions, "GetPrivateLan/"+networkID)
+	if networkID == "net-TestPrivate" {
 		return &computing.PrivateLanSet{
 			CidrBlock: &cidrBlock,
 			RouterSet: []computing.RouterSetOfNiftyDescribePrivateLans{
 				computing.RouterSetOfNiftyDescribePrivateLans{
-					RouterId: &routerId,
+					RouterId: &routerID,
 				},
 			},
 		}, nil
 	}
-	return nil, awserr.New("TestAwsErrorNotFound", "", fmt.Errorf("Private Lan (networkId=%s) not found", networkId))
+	return nil, awserr.New("TestAwsErrorNotFound", "", fmt.Errorf("Private Lan (networkId=%s) not found", networkID))
 }
 
 var poolStart, poolStop string
-var dhcpIpAddresses []computing.DhcpIpAddressSet
+var dhcpIPAddresses []computing.DhcpIpAddressSet
 
-func setDhcpIpAddresses(ips []string) {
-	dhcpIpAddresses = []computing.DhcpIpAddressSet{}
+func setDhcpIPAddresses(ips []string) {
+	dhcpIPAddresses = []computing.DhcpIpAddressSet{}
 	for i := 0; i < len(ips); i++ {
-		dhcpIpAddresses = append(dhcpIpAddresses, computing.DhcpIpAddressSet{
+		dhcpIPAddresses = append(dhcpIPAddresses, computing.DhcpIpAddressSet{
 			IpAddress: &ips[i],
 		})
 	}
 }
 
-func (c *FakeCloud) GetDhcpStatus(ctx context.Context, networkId, routerId string) (
+func (c *FakeCloud) GetDhcpStatus(ctx context.Context, networkID, routerID string) (
 	[]computing.IpAddressPoolSet, []computing.DhcpIpAddressSet, error) {
-	c.Actions = append(c.Actions, "GetDhcpStatus/" + networkId + "/" + routerId)
+	c.Actions = append(c.Actions, "GetDhcpStatus/"+networkID+"/"+routerID)
 	pools := []computing.IpAddressPoolSet{
 		computing.IpAddressPoolSet{
 			StartIpAddress: &poolStart,
-			StopIpAddress: &poolStop,
+			StopIpAddress:  &poolStop,
 		},
 	}
-	return pools, dhcpIpAddresses, nil
+	return pools, dhcpIPAddresses, nil
 }
 
 // rdb
 
 var dbs []rdb.DBInstance
 
-func initDB(ip, networkId string) {
+func initDB(ip, networkID string) {
 	dbs = []rdb.DBInstance{}
 	if ip != "" {
 		dbs = append(dbs, rdb.DBInstance{
-			NiftyNetworkId: &networkId,
+			NiftyNetworkId:            &networkID,
 			NiftyMasterPrivateAddress: &ip,
 		})
 	}

@@ -1,36 +1,38 @@
 package driver
 
 import (
-	"fmt"
 	"bufio"
-	"time"
+	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/cenkalti/backoff"
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/golang/glog"
 	"github.com/golang/protobuf/ptypes"
 	"golang.org/x/net/context"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 )
 
+// ResticSnapshot holds informations of a restic snapshot
 type ResticSnapshot struct {
-	ShortId  string `json:"short_id"`
-	Id       string `json:"id"`
-	Time     string `json:"time"`
+	ShortID  string   `json:"short_id"`
+	ID       string   `json:"id"`
+	Time     string   `json:"time"`
 	Paths    []string `json:"paths"`
-	Hostname string `json:"hostname"`
-	Username string `json:"username"`
-	Tree     string `json:"tree"`
-	Parent   string `json:"parent"`
+	Hostname string   `json:"hostname"`
+	Username string   `json:"username"`
+	Tree     string   `json:"tree"`
+	Parent   string   `json:"parent"`
 }
 
-func (snap *ResticSnapshot) GetSourceVolumeId() string {
+// GetSourceVolumeID returns the path name of the snapshot
+func (snap *ResticSnapshot) GetSourceVolumeID() string {
 	if len(snap.Paths) == 0 {
 		return ""
 	}
@@ -38,20 +40,21 @@ func (snap *ResticSnapshot) GetSourceVolumeId() string {
 	return file
 }
 
+// ResticBackupSummary holds informations of a restic snapshot summary
 type ResticBackupSummary struct {
-	FilesNew int64 `json:"files_new"`
-	FilesChanges int64 `json:"files_changed"`
-	FilesUnmodified int64 `json:"files_unmodified"`
-	DirsNew int64 `json:"dirs_new"`
-	DirsChanges int64 `json:"dirs_changed"`
-	DirsModified int64 `json:"dirs_unmodified"`
-	DataBlobs int64 `json:"data_blobs"`
-	TreeBlobs int64 `json:"tree_blobs"`
-	DataAdded int64 `json:"data_added"`
-	TotalFilesProcessed int64 `json:"total_files_processed"`
-	TotalBytesProcessed int64 `json:"total_bytes_processed"`
-	TotalDuration float64 `json:"total_duration"`
-	SnapshotId string `json:"snapshot_id"`
+	FilesNew            int64   `json:"files_new"`
+	FilesChanges        int64   `json:"files_changed"`
+	FilesUnmodified     int64   `json:"files_unmodified"`
+	DirsNew             int64   `json:"dirs_new"`
+	DirsChanges         int64   `json:"dirs_changed"`
+	DirsModified        int64   `json:"dirs_unmodified"`
+	DataBlobs           int64   `json:"data_blobs"`
+	TreeBlobs           int64   `json:"tree_blobs"`
+	DataAdded           int64   `json:"data_added"`
+	TotalFilesProcessed int64   `json:"total_files_processed"`
+	TotalBytesProcessed int64   `json:"total_bytes_processed"`
+	TotalDuration       float64 `json:"total_duration"`
+	SnapshotID          string  `json:"snapshot_id"`
 }
 
 func newCSISnapshot(snapshot *ResticSnapshot, sizeBytes int64) (*csi.Snapshot, error) {
@@ -63,13 +66,13 @@ func newCSISnapshot(snapshot *ResticSnapshot, sizeBytes int64) (*csi.Snapshot, e
 	if err != nil {
 		return nil, fmt.Errorf("Error converting timestamp : %s", err.Error())
 	}
-	volumeId := snapshot.GetSourceVolumeId()
-	if volumeId == "" {
+	volumeID := snapshot.GetSourceVolumeID()
+	if volumeID == "" {
 		return nil, fmt.Errorf("Error getting SourceVolumeID")
 	}
 	snap := &csi.Snapshot{
-		SnapshotId:     snapshot.ShortId,
-		SourceVolumeId: volumeId,
+		SnapshotId:     snapshot.ShortID,
+		SourceVolumeId: volumeID,
 		CreationTime:   tsp,
 		ReadyToUse:     true,
 	}
@@ -80,11 +83,11 @@ func newCSISnapshot(snapshot *ResticSnapshot, sizeBytes int64) (*csi.Snapshot, e
 }
 
 type restic struct {
-	pw string
-	accesskey string
-	secretkey string
+	pw         string
+	accesskey  string
+	secretkey  string
 	repository string
-	image string
+	image      string
 }
 
 func newRestic(secrets map[string]string) (*restic, error) {
@@ -103,11 +106,11 @@ func newRestic(secrets map[string]string) (*restic, error) {
 	}
 
 	return &restic{
-		pw: secrets["resticPassword"],
-		accesskey: secrets["accesskey"],
-		secretkey: secrets["secretkey"],
+		pw:         secrets["resticPassword"],
+		accesskey:  secrets["accesskey"],
+		secretkey:  secrets["secretkey"],
 		repository: secrets["resticRepository"],
-		image: "fj3817ia/restic-scratch:0.9.6b",
+		image:      "fj3817ia/restic-scratch:0.9.6b",
 	}, nil
 }
 
@@ -116,11 +119,12 @@ func retryNotifyRestic(err error, wait time.Duration) {
 }
 
 var (
-	test_restic_pod_log = map[string]string{}
+	testResticPodLog = map[string]string{}
 )
 
 // execute restic Job with backing off
-func doResticJob(ctx context.Context, job *batchv1.Job, secret *corev1.Secret, kubeClient kubernetes.Interface, initInterval int) (string, error) {
+func doResticJob(ctx context.Context, job *batchv1.Job,
+	secret *corev1.Secret, kubeClient kubernetes.Interface, initInterval int) (string, error) {
 
 	name := job.GetName()
 	namespace := job.GetNamespace()
@@ -130,7 +134,12 @@ func doResticJob(ctx context.Context, job *batchv1.Job, secret *corev1.Secret, k
 	if err != nil && !errors.IsAlreadyExists(err) {
 		return "", fmt.Errorf("Creating restic secret error - %s", err.Error())
 	}
-	defer kubeClient.CoreV1().Secrets(namespace).Delete(ctx, secret.GetName(), metav1.DeleteOptions{})
+	defer func() {
+		err := kubeClient.CoreV1().Secrets(namespace).Delete(ctx, secret.GetName(), metav1.DeleteOptions{})
+		if err != nil {
+			glog.Warningf("error deleting secret %s in doResticJob : %s", secret.GetName(), err.Error())
+		}
+	}()
 
 	// Create job
 	var dp metav1.DeletionPropagation = metav1.DeletePropagationForeground
@@ -139,13 +148,21 @@ func doResticJob(ctx context.Context, job *batchv1.Job, secret *corev1.Secret, k
 		if !errors.IsAlreadyExists(err) {
 			return "", fmt.Errorf("Creating restic job error - %s", err.Error())
 		}
-		kubeClient.BatchV1().Jobs(namespace).Delete(ctx, name, metav1.DeleteOptions{PropagationPolicy:&dp})
+		err = kubeClient.BatchV1().Jobs(namespace).Delete(ctx, name, metav1.DeleteOptions{PropagationPolicy: &dp})
+		if err != nil {
+			glog.Warningf("error deleting job %s in doResticJob : %s", name, err.Error())
+		}
 		_, err = kubeClient.BatchV1().Jobs(namespace).Create(ctx, job, metav1.CreateOptions{})
 		if err != nil {
 			return "", fmt.Errorf("Re-creating restic job error - %s", err.Error())
 		}
 	}
-	defer kubeClient.BatchV1().Jobs(namespace).Delete(ctx, name, metav1.DeleteOptions{PropagationPolicy:&dp})
+	defer func() {
+		err := kubeClient.BatchV1().Jobs(namespace).Delete(ctx, name, metav1.DeleteOptions{PropagationPolicy: &dp})
+		if err != nil {
+			glog.Warningf("error deleting job %s in doResticJob : %s", name, err.Error())
+		}
+	}()
 
 	// wait for job completed with backoff retry
 	b := backoff.NewExponentialBackOff()
@@ -161,9 +178,8 @@ func doResticJob(ctx context.Context, job *batchv1.Job, secret *corev1.Secret, k
 		if len(chkJob.Status.Conditions) > 0 {
 			if chkJob.Status.Conditions[0].Type == "Failed" {
 				return backoff.Permanent(fmt.Errorf("Job %s failed", name))
-			} else {
-				return nil
 			}
+			return nil
 		}
 		return fmt.Errorf("Job %s is running", name)
 	}
@@ -177,7 +193,7 @@ func doResticJob(ctx context.Context, job *batchv1.Job, secret *corev1.Secret, k
 	if err != nil {
 		return "", fmt.Errorf("Listing job pods error - %s", err.Error())
 	}
-	for _, pod := range(podList.Items) {
+	for _, pod := range podList.Items {
 		refs := pod.ObjectMeta.GetOwnerReferences()
 		if len(refs) > 0 && refs[0].Name == name {
 			req := kubeClient.CoreV1().Pods(namespace).GetLogs(pod.Name, &corev1.PodLogOptions{})
@@ -186,7 +202,12 @@ func doResticJob(ctx context.Context, job *batchv1.Job, secret *corev1.Secret, k
 				return "", fmt.Errorf("Logs request error - %s", err.Error())
 			}
 			reader := bufio.NewReader(podLogs)
-			defer podLogs.Close()
+			defer func() {
+				err := podLogs.Close()
+				if err != nil {
+					glog.Warningf("error closing pod logs in doResticJob : %s", err.Error())
+				}
+			}()
 			// return a line which contains 'summary' or a last one
 			out := ""
 			for {
@@ -195,7 +216,7 @@ func doResticJob(ctx context.Context, job *batchv1.Job, secret *corev1.Secret, k
 					out = line
 					// for test
 					if strings.Contains(out, "fake logs") {
-						out = test_restic_pod_log[name]
+						out = testResticPodLog[name]
 					}
 				}
 				if err != nil || strings.Contains(out, "summary") {
@@ -219,11 +240,11 @@ func (r *restic) resticJobListSnapshots() (*batchv1.Job, *corev1.Secret) {
 }
 
 // restic backup
-func (r *restic) resticJobBackup(volumeId, pvc, namespace, clusterUID string) (*batchv1.Job, *corev1.Secret) {
-	job := r.resticJob("restic-job-backup-" + volumeId, namespace)
+func (r *restic) resticJobBackup(volumeID, pvc, namespace, clusterUID string) (*batchv1.Job, *corev1.Secret) {
+	job := r.resticJob("restic-job-backup-"+volumeID, namespace)
 	job.Spec.Template.Spec.Containers[0].Args = append(
 		job.Spec.Template.Spec.Containers[0].Args,
-		[]string{"backup", "--json", "--tag", clusterUID, "/" + volumeId}...,
+		[]string{"backup", "--json", "--tag", clusterUID, "/" + volumeID}...,
 	)
 	volume := corev1.Volume{
 		Name: "pvc",
@@ -235,9 +256,9 @@ func (r *restic) resticJobBackup(volumeId, pvc, namespace, clusterUID string) (*
 	}
 	job.Spec.Template.Spec.Volumes = append(job.Spec.Template.Spec.Volumes, volume)
 	volumeMount := corev1.VolumeMount{
-		Name: "pvc",
-		MountPath: "/" + volumeId,
-		ReadOnly: true,
+		Name:      "pvc",
+		MountPath: "/" + volumeID,
+		ReadOnly:  true,
 	}
 	job.Spec.Template.Spec.Containers[0].VolumeMounts = append(
 		job.Spec.Template.Spec.Containers[0].VolumeMounts,
@@ -248,35 +269,35 @@ func (r *restic) resticJobBackup(volumeId, pvc, namespace, clusterUID string) (*
 }
 
 // restic delete
-func (r *restic) resticJobDelete(snapshotId string) (*batchv1.Job, *corev1.Secret) {
-	job := r.resticJob("restic-job-delete-" + snapshotId, "default")
+func (r *restic) resticJobDelete(snapshotID string) (*batchv1.Job, *corev1.Secret) {
+	job := r.resticJob("restic-job-delete-"+snapshotID, "default")
 	job.Spec.Template.Spec.Containers[0].Args = append(
 		job.Spec.Template.Spec.Containers[0].Args,
-		[]string{"forget", "--prune", snapshotId}...,
+		[]string{"forget", "--prune", snapshotID}...,
 	)
 	return job, r.resticSecret("default")
 }
 
 // restic restore
-func (r *restic) resticJobRestore(snapId, ip, path, snapPath string) (*batchv1.Job, *corev1.Secret) {
+func (r *restic) resticJobRestore(snapID, ip, path, snapPath string) (*batchv1.Job, *corev1.Secret) {
 	// Job
-	job := r.resticJob("restic-job-restore-" + snapId, "default")
+	job := r.resticJob("restic-job-restore-"+snapID, "default")
 	job.Spec.Template.Spec.Containers[0].Args = append(
 		job.Spec.Template.Spec.Containers[0].Args,
-		[]string{"restore", "-t", "/mnt", snapId}...,
+		[]string{"restore", "-t", "/mnt", snapID}...,
 	)
 	volume := corev1.Volume{
 		Name: "restore-target",
 		VolumeSource: corev1.VolumeSource{
 			NFS: &corev1.NFSVolumeSource{
 				Server: ip,
-				Path: path,
+				Path:   path,
 			},
 		},
 	}
 	job.Spec.Template.Spec.Volumes = append(job.Spec.Template.Spec.Volumes, volume)
 	volumeMount := corev1.VolumeMount{
-		Name: "restore-target",
+		Name:      "restore-target",
 		MountPath: filepath.Join("/mnt", snapPath),
 	}
 	job.Spec.Template.Spec.Containers[0].VolumeMounts = append(
@@ -296,9 +317,9 @@ func (r *restic) resticSecret(namespace string) *corev1.Secret {
 			Namespace: namespace,
 		},
 		Data: map[string][]byte{
-			"resticPassword": []byte(r.pw),
-			"accesskey": []byte(r.accesskey),
-			"secretkey": []byte(r.secretkey),
+			"resticPassword":   []byte(r.pw),
+			"accesskey":        []byte(r.accesskey),
+			"secretkey":        []byte(r.secretkey),
 			"resticRepository": []byte(r.repository),
 		},
 	}
@@ -326,7 +347,7 @@ func (r *restic) resticJob(name, namespace string) *batchv1.Job {
 									ValueFrom: &corev1.EnvVarSource{
 										SecretKeyRef: &corev1.SecretKeySelector{
 											LocalObjectReference: corev1.LocalObjectReference{Name: resticSecretName},
-											Key: "accesskey",
+											Key:                  "accesskey",
 										},
 									},
 								},
@@ -335,7 +356,7 @@ func (r *restic) resticJob(name, namespace string) *batchv1.Job {
 									ValueFrom: &corev1.EnvVarSource{
 										SecretKeyRef: &corev1.SecretKeySelector{
 											LocalObjectReference: corev1.LocalObjectReference{Name: resticSecretName},
-											Key: "secretkey",
+											Key:                  "secretkey",
 										},
 									},
 								},
@@ -344,7 +365,7 @@ func (r *restic) resticJob(name, namespace string) *batchv1.Job {
 									ValueFrom: &corev1.EnvVarSource{
 										SecretKeyRef: &corev1.SecretKeySelector{
 											LocalObjectReference: corev1.LocalObjectReference{Name: resticSecretName},
-											Key: "resticPassword",
+											Key:                  "resticPassword",
 										},
 									},
 								},
@@ -353,7 +374,7 @@ func (r *restic) resticJob(name, namespace string) *batchv1.Job {
 									ValueFrom: &corev1.EnvVarSource{
 										SecretKeyRef: &corev1.SecretKeySelector{
 											LocalObjectReference: corev1.LocalObjectReference{Name: resticSecretName},
-											Key: "resticRepository",
+											Key:                  "resticRepository",
 										},
 									},
 								},

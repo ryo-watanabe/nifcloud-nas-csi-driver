@@ -1,4 +1,3 @@
-
 /*
 Copyright 2018 The Kubernetes Authors.
 
@@ -19,38 +18,39 @@ package driver
 
 import (
 	"fmt"
-	"time"
 	"reflect"
+	"time"
 
 	"github.com/golang/glog"
 	"golang.org/x/net/context"
-	"k8s.io/apimachinery/pkg/util/runtime"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/runtime"
 
 	"github.com/nifcloud/nifcloud-sdk-go/service/nas"
 	"github.com/ryo-watanabe/nifcloud-nas-csi-driver/pkg/cloud"
 )
 
+// NSGSyncer provides nodes private IPs and NASSecurityGroup authorized IPs synchronization
 type NSGSyncer struct {
-	driver *NifcloudNasDriver
-	SyncPeriod int64
-	internalChkIntvl int64
-	cloudChkIntvl int64
-	hasTask bool
-	restoreClusterId bool
-	lastNodePrivateIps *map[string]bool
+	driver                 *NifcloudNasDriver
+	SyncPeriod             int64
+	internalChkIntvl       int64
+	cloudChkIntvl          int64
+	hasTask                bool
+	restoreClusterID       bool
+	lastNodePrivateIps     *map[string]bool
 	lastSecurityGroupInput *nas.CreateNASSecurityGroupInput
 }
 
 func newNSGSyncer(driver *NifcloudNasDriver) *NSGSyncer {
 	return &NSGSyncer{
-		driver:  driver,
-		SyncPeriod: 30, // seconds
-		internalChkIntvl: 300, // seconds
-		cloudChkIntvl: 3600, // seconds
-		hasTask: true,
-		restoreClusterId: driver.config.RestoreClstId,
-		lastNodePrivateIps: nil,
+		driver:                 driver,
+		SyncPeriod:             30,   // seconds
+		internalChkIntvl:       300,  // seconds
+		cloudChkIntvl:          3600, // seconds
+		hasTask:                true,
+		restoreClusterID:       driver.config.RestoreClstID,
+		lastNodePrivateIps:     nil,
 		lastSecurityGroupInput: nil,
 	}
 }
@@ -62,6 +62,7 @@ func (s *NSGSyncer) runNSGSyncer() {
 	}
 }
 
+// DoesHaveTask returns hasTask
 func (s *NSGSyncer) DoesHaveTask() bool {
 	return s.hasTask
 }
@@ -76,13 +77,13 @@ func getSecurityGroupName(ctx context.Context, driver *NifcloudNasDriver) (strin
 	return "cluster-" + clusterUID, nil
 }
 
-// Sync StorageClass resource and NasSecurityGrooup
+// SyncNasSecurityGroups syncs nodes private IPs and NASSecurityGroup authorized IPs
 func (s *NSGSyncer) SyncNasSecurityGroups() error {
 
 	// Skip some syncs when current tasks seem to be done.
 	p := time.Now().Unix() / s.SyncPeriod
-	doInternalChk := ( p % (s.internalChkIntvl/s.SyncPeriod) == 0 )
-	doCloudChk := ( p % (s.cloudChkIntvl/s.SyncPeriod) == 0 )
+	doInternalChk := (p%(s.internalChkIntvl/s.SyncPeriod) == 0)
+	doCloudChk := (p%(s.cloudChkIntvl/s.SyncPeriod) == 0)
 	glog.V(5).Infof("SyncNasSecurityGroups %d internal check:%v cloud check:%v", p, doInternalChk, doCloudChk)
 
 	if !s.hasTask && !doInternalChk && !doCloudChk {
@@ -99,18 +100,17 @@ func (s *NSGSyncer) SyncNasSecurityGroups() error {
 	if err != nil {
 		return fmt.Errorf("Error getting node private IPs: %s", err.Error())
 	}
-	nodePrivateIps := make(map[string]bool, 0)
+	nodePrivateIps := make(map[string]bool)
 	for _, node := range csinodes.Items {
 		annotations := node.ObjectMeta.GetAnnotations()
 		if annotations != nil {
-			privateIp := annotations[s.driver.config.Name + "/privateIp"]
-			if privateIp != "" {
-				nodePrivateIps[privateIp] = true
+			privateIP := annotations[s.driver.config.Name+"/privateIp"]
+			if privateIP != "" {
+				nodePrivateIps[privateIP] = true
 			}
 		}
 	}
 	glog.V(5).Infof("nodePrivateIps : %v", nodePrivateIps)
-
 
 	// NAS Security Groups
 	securityGroupName, err := getSecurityGroupName(ctx, s.driver)
@@ -127,7 +127,7 @@ func (s *NSGSyncer) SyncNasSecurityGroups() error {
 			zone := class.Parameters["zone"]
 			if securityGroupName != "" && zone != "" {
 				securityGroupInput = &nas.CreateNASSecurityGroupInput{
-					AvailabilityZone: &zone,
+					AvailabilityZone:     &zone,
 					NASSecurityGroupName: &securityGroupName,
 				}
 				break
@@ -143,7 +143,7 @@ func (s *NSGSyncer) SyncNasSecurityGroups() error {
 	// Internal check
 	if s.lastNodePrivateIps != nil && s.lastSecurityGroupInput != nil {
 		if reflect.DeepEqual(nodePrivateIps, *s.lastNodePrivateIps) &&
-		   reflect.DeepEqual(*securityGroupInput, *s.lastSecurityGroupInput) {
+			reflect.DeepEqual(*securityGroupInput, *s.lastSecurityGroupInput) {
 			if !s.hasTask && !doCloudChk {
 				return nil
 			}
@@ -180,9 +180,9 @@ func (s *NSGSyncer) SyncNasSecurityGroups() error {
 	}
 
 	// Restore NASSecurityGroup name on starting if there are PVs from snapshot with the old cluster's NASSecurityGroup
-	if s.restoreClusterId {
+	if s.restoreClusterID {
 		// Try restoring only one time
-		s.restoreClusterId = false
+		s.restoreClusterID = false
 
 		// Get nas names from PVs
 		pvs, err := kubeClient.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{})
@@ -199,7 +199,7 @@ func (s *NSGSyncer) SyncNasSecurityGroups() error {
 		// Check and repair NASSecurityGroup Name
 		cnt := 0
 		for _, volumeID := range volumeHandles {
-			nas, err := s.driver.config.Cloud.GetNasInstanceFromVolumeId(ctx, volumeID)
+			nas, err := s.driver.config.Cloud.GetNasInstanceFromVolumeID(ctx, volumeID)
 			if err != nil {
 				return fmt.Errorf("Error getting NASInstance %s : %s", volumeID, err.Error())
 			}
@@ -239,7 +239,7 @@ func (s *NSGSyncer) SyncNasSecurityGroups() error {
 	}
 
 	// Authorize node private ip if not.
-	for ip, _ := range nodePrivateIps {
+	for ip := range nodePrivateIps {
 		authorized := false
 		iprange := ip + "/32"
 		for _, aip := range nsg.IPRanges {
@@ -269,7 +269,7 @@ func (s *NSGSyncer) SyncNasSecurityGroups() error {
 	// Revoke CIDRIPs not in node private IPs.
 	for _, aip := range nsg.IPRanges {
 		nodeExists := false
-		for ip, _ := range nodePrivateIps {
+		for ip := range nodePrivateIps {
 			iprange := ip + "/32"
 			if *aip.CIDRIP == iprange {
 				nodeExists = true
