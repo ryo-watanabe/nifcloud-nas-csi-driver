@@ -23,7 +23,7 @@ import (
 	"github.com/cenkalti/backoff"
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/golang/glog"
-	clientset "github.com/kubernetes-csi/external-snapshotter/client/v3/clientset/versioned"
+	clientset "github.com/kubernetes-csi/external-snapshotter/client/v4/clientset/versioned"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -35,20 +35,24 @@ import (
 
 // NifcloudNasDriverConfig holds CSI options
 type NifcloudNasDriverConfig struct {
-	Name          string               // Driver name
-	Version       string               // Driver version
-	NodeID        string               // Node name
-	PrivateIfName string               // Private network interface name
-	RunController bool                 // Run CSI controller service
-	RunNode       bool                 // Run CSI node service
-	Mounter       mount.Interface      // Mount library
-	Cloud         cloud.Interface      // Cloud provider
-	KubeClient    kubernetes.Interface // k8s client
-	SnapClient    clientset.Interface  // snapshot client
-	InitBackoff   time.Duration
-	PrivateIPReg  bool
-	Configurator  bool
-	RestoreClstID bool
+	Name              string               // Driver name
+	Version           string               // Driver version
+	NodeID            string               // Node name
+	PrivateIfName     string               // Private network interface name
+	RunController     bool                 // Run CSI controller service
+	RunNode           bool                 // Run CSI node service
+	Mounter           mount.Interface      // Mount library
+	Cloud             cloud.Interface      // Cloud provider
+	KubeClient        kubernetes.Interface // k8s client
+	SnapClient        clientset.Interface  // snapshot client
+	InitBackoff       time.Duration
+	PrivateIPReg      bool
+	Configurator      bool
+	RestoreClstID     bool
+	Hatoba            bool
+	CidrBlkRcmd       bool
+	CfgSnapRepo       bool
+	DefaultSnapRegion string
 }
 
 // NifcloudNasDriver a CSI driver

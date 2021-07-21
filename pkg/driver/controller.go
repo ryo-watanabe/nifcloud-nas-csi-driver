@@ -201,6 +201,7 @@ func GenerateNasInstanceInput(
 	zone := "east-11"
 	network := "net-COMMON_PRIVATE"
 	protocol := "nfs"
+	description := "csi-volume"
 	var err error
 
 	// Validate parameters (case-insensitive).
@@ -215,6 +216,8 @@ func GenerateNasInstanceInput(
 			zone = v
 		case "networkid":
 			network = v
+		case "description":
+			description = v
 		case "reservedipv4cidr", "capacityparinstancegib", "shared":
 			// allowed
 		default:
@@ -225,8 +228,9 @@ func GenerateNasInstanceInput(
 		AllocatedStorage: getAllocatedStorage(capBytes, instanceType),
 		AvailabilityZone: &zone,
 		//MasterPrivateAddress: must set after
-		NASInstanceIdentifier: &name,
-		NASInstanceType:       &instanceType,
+		NASInstanceIdentifier:  &name,
+		NASInstanceType:        &instanceType,
+		NASInstanceDescription: &description,
 		//NASSecurityGroups: must set after
 		NetworkId: &network,
 		Protocol:  &protocol,

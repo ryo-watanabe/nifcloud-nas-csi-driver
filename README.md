@@ -193,7 +193,7 @@ parameters:
 - Create another shared NASInstance when requested resource sum of PVCs exceeds its capacity.
 - Delete shared NASInstance when all PVCs deleted.
 
-### Setting NAS private IP with PVC annotations
+### Setting NAS private IP in PVC annotations
 
 ```
 kind: PersistentVolumeClaim
@@ -212,3 +212,17 @@ spec:
 ```
 - IP address like "192.168.10.64" can be used same as "192.168.10.64/32"
 - If no annotations set, StorageClass parameter reservedIPv4Cidr is used for private IP selection
+
+## Volume Snapshots
+
+### How to Deploy
+CRDs & controller
+```
+kubectl apply -f https://raw.githubusercontent.com/kubernetes-csi/external-snapshotter/release-4.1/client/config/crd/snapshot.storage.k8s.io_volumesnapshots.yaml
+kubectl apply -f https://raw.githubusercontent.com/kubernetes-csi/external-snapshotter/release-4.1/client/config/crd/snapshot.storage.k8s.io_volumesnapshotcontents.yaml
+kubectl apply -f https://raw.githubusercontent.com/kubernetes-csi/external-snapshotter/release-4.1/client/config/crd/snapshot.storage.k8s.io_volumesnapshotclasses.yaml
+
+kubectl apply -f https://raw.githubusercontent.com/kubernetes-csi/external-snapshotter/release-4.1/deploy/kubernetes/snapshot-controller/rbac-snapshot-controller.yaml
+kubectl apply -f https://raw.githubusercontent.com/kubernetes-csi/external-snapshotter/release-4.1/deploy/kubernetes/snapshot-controller/setup-snapshot-controller.yaml
+```
+

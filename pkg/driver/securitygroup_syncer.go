@@ -19,6 +19,7 @@ package driver
 import (
 	"fmt"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/golang/glog"
@@ -189,16 +190,21 @@ func (s *NSGSyncer) SyncNasSecurityGroups() error {
 		if err != nil {
 			return fmt.Errorf("Error PV list: %s", err.Error())
 		}
-		volumeHandles := []string{}
+		volumeIDs := map[string]bool{}
 		for _, pv := range pvs.Items {
 			if pv.Spec.CSI != nil && pv.Spec.CSI.Driver == s.driver.config.Name {
-				volumeHandles = append(volumeHandles, pv.Spec.CSI.VolumeHandle)
+				tokens := strings.Split(pv.Spec.CSI.VolumeHandle, "/")
+				if len(tokens) < 2 {
+					return fmt.Errorf("VolumeHandle format error : %s", pv.Spec.CSI.VolumeHandle)
+				}
+				volumeID := strings.Join(tokens[0:2], "/")
+				volumeIDs[volumeID] = true
 			}
 		}
 
 		// Check and repair NASSecurityGroup Name
 		cnt := 0
-		for _, volumeID := range volumeHandles {
+		for volumeID := range volumeIDs {
 			nas, err := s.driver.config.Cloud.GetNasInstanceFromVolumeID(ctx, volumeID)
 			if err != nil {
 				return fmt.Errorf("Error getting NASInstance %s : %s", volumeID, err.Error())

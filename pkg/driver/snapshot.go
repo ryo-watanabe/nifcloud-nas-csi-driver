@@ -33,6 +33,16 @@ func getPVCFromVolumeID(ctx context.Context, volumeID string, driver *NifcloudNa
 	return "", "", fmt.Errorf("Error PVC %s not found", pvcUIDs[1])
 }
 
+func sanitizeJSON(input string) string {
+	lines := strings.Split(input, "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "[") || strings.HasPrefix(line, "{") {
+			return line
+		}
+	}
+	return ""
+}
+
 func (s *controllerServer) CreateSnapshot(
 	ctx context.Context, req *csi.CreateSnapshotRequest) (*csi.CreateSnapshotResponse, error) {
 
@@ -54,11 +64,33 @@ func (s *controllerServer) CreateSnapshot(
 		return nil, status.Error(codes.InvalidArgument, "Cannot find pvc bounded to "+name+" : "+err.Error())
 	}
 
-	// Backup job
+	// check repository
 	r, err := newRestic(req.GetSecrets())
 	if err != nil {
 		return nil, status.Error(codes.Internal, "Error configure restic job : "+err.Error())
 	}
+	chkJob, secret := r.resticJobListSnapshots()
+	_, err = doResticJob(ctx, chkJob, secret, s.config.driver.config.KubeClient, 5)
+	if err != nil {
+		if strings.Contains(err.Error(), "specified key does not exist") {
+			// first snapshot for the cluster, create repository
+			// check bucket, create if not exist
+			err = r.checkBucket()
+			if err != nil {
+				return nil, status.Error(codes.Internal, "creating bucket for the repository failed : "+err.Error())
+			}
+			// initialize repository
+			initJob, secret := r.resticJobInit()
+			_, err = doResticJob(ctx, initJob, secret, s.config.driver.config.KubeClient, 5)
+			if err != nil {
+				return nil, status.Error(codes.Internal, "Initializing repository failed : "+err.Error())
+			}
+		} else {
+			return nil, status.Error(codes.Internal, "Checking repository failed : "+err.Error())
+		}
+	}
+
+	// Backup job
 	// Get kube-system UID for cluster ID
 	clusterUID, err := getNamespaceUID(ctx, "kube-system", s.config.driver)
 	if err != nil {
@@ -70,9 +102,8 @@ func (s *controllerServer) CreateSnapshot(
 	if err != nil {
 		return nil, status.Error(codes.Internal, "Error running backup job : "+err.Error())
 	}
-
 	// Perse backup summary
-	jsonBytes := []byte(output)
+	jsonBytes := []byte(sanitizeJSON(output))
 	summary := new(ResticBackupSummary)
 	err = json.Unmarshal(jsonBytes, summary)
 	if err != nil {
@@ -85,9 +116,8 @@ func (s *controllerServer) CreateSnapshot(
 	if err != nil {
 		return nil, status.Error(codes.Internal, "Error running list snapshots job : "+err.Error())
 	}
-
 	// Perse snapshot list
-	jsonBytes = []byte(output)
+	jsonBytes = []byte(sanitizeJSON(output))
 	list := []ResticSnapshot{}
 	err = json.Unmarshal(jsonBytes, &list)
 	if err != nil {
@@ -203,8 +233,7 @@ func getSecretsFromSnapshotID(
 	m := make(map[string]string)
 
 	snapClient := driver.config.SnapClient
-	kubeClient := driver.config.KubeClient
-	contents, err := snapClient.SnapshotV1beta1().VolumeSnapshotContents().List(ctx, metav1.ListOptions{})
+	contents, err := snapClient.SnapshotV1().VolumeSnapshotContents().List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return m, fmt.Errorf("Error getting volumesnapshotcontents list : %s", err.Error())
 	}
@@ -218,7 +247,18 @@ func getSecretsFromSnapshotID(
 	if className == "" {
 		return m, fmt.Errorf("Error snapshotId %s not found in volumesnapshotcontents", snapshotID)
 	}
-	class, err := snapClient.SnapshotV1beta1().VolumeSnapshotClasses().Get(ctx, className, metav1.GetOptions{})
+	return getSecretsFromSnapshotClass(ctx, className, driver)
+}
+
+// Get snapshotclass secrets from SnapshotClass
+func getSecretsFromSnapshotClass(
+	ctx context.Context, className string, driver *NifcloudNasDriver) (map[string]string, error) {
+
+	m := make(map[string]string)
+
+	snapClient := driver.config.SnapClient
+	kubeClient := driver.config.KubeClient
+	class, err := snapClient.SnapshotV1().VolumeSnapshotClasses().Get(ctx, className, metav1.GetOptions{})
 	if err != nil {
 		return m, fmt.Errorf("Error getting volumesnapshotclass %s : %s", className, err.Error())
 	}

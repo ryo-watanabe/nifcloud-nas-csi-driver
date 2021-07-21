@@ -3,16 +3,24 @@ package driver
 import (
 	"fmt"
 	"net"
+
+	//"os"
 	"strings"
 
 	"github.com/golang/glog"
+	snapshotv1 "github.com/kubernetes-csi/external-snapshotter/client/v4/apis/volumesnapshot/v1"
 	"golang.org/x/net/context"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/rand"
 	"k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/kubernetes"
 
+	//"github.com/aws/aws-sdk-go/aws"
+	//"github.com/aws/aws-sdk-go/aws/credentials"
+	//"github.com/aws/aws-sdk-go/aws/session"
+	//"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/nifcloud/nifcloud-sdk-go/service/computing"
 	"github.com/ryo-watanabe/nifcloud-nas-csi-driver/pkg/cloud"
 )
@@ -26,15 +34,16 @@ type NodeConfig struct {
 
 // Configurator sets private LAN configurations for CSI
 type Configurator struct {
-	driver     *NifcloudNasDriver
-	kubeClient kubernetes.Interface
-	cloud      cloud.Interface
-	networkID  string
-	zone       string
-	nodes      []NodeConfig
-	cidr       string
-	ctx        context.Context
-	chkIntvl   int64
+	driver      *NifcloudNasDriver
+	kubeClient  kubernetes.Interface
+	cloud       cloud.Interface
+	networkID   string
+	zone        string
+	nodes       []NodeConfig
+	cidr        string
+	clusterName string
+	ctx         context.Context
+	chkIntvl    int64
 }
 
 func newConfigurator(driver *NifcloudNasDriver) *Configurator {
@@ -53,34 +62,36 @@ func (c *Configurator) Init() error {
 	if err != nil {
 		return err
 	}
-	nodesUpdated, err := c.getNodeConfigs()
-	if err != nil {
-		return err
+	if c.driver.config.CfgSnapRepo {
+		err = c.installSnapshotClasses()
+		if err != nil {
+			return err
+		}
 	}
-	classesUpdated, err := c.getStorageClasses()
-	if err != nil {
-		return err
-	}
-	if !nodesUpdated && !classesUpdated {
-		return nil
-	}
-	return c.configure(classesUpdated)
+	return c.Update()
 }
 
 // Update updates configurations if necessary
 func (c *Configurator) Update() error {
-	nodesUpdated, err := c.getNodeConfigs()
+	nodesUpdate, err := c.getNodeConfigs()
 	if err != nil {
 		return err
 	}
-	classesUpdated, err := c.getStorageClasses()
+	classesUpdate, err := c.getStorageClasses()
 	if err != nil {
 		return err
 	}
-	if !nodesUpdated && !classesUpdated {
+	snapClassUpdate := false
+	if c.driver.config.CfgSnapRepo {
+		snapClassUpdate, err = c.getSnapshotClasses()
+		if err != nil {
+			return err
+		}
+	}
+	if !nodesUpdate && !classesUpdate && !snapClassUpdate {
 		return nil
 	}
-	return c.configure(classesUpdated)
+	return c.configure(classesUpdate, snapClassUpdate)
 }
 
 func (c *Configurator) runUpdate() {
@@ -90,42 +101,50 @@ func (c *Configurator) runUpdate() {
 	}
 }
 
-func (c *Configurator) configure(configureClasses bool) error {
+func (c *Configurator) configure(configureClasses bool, configureSnapClass bool) error {
 
 	glog.V(4).Infof("Configurator starts to obtain private network settings from cloud")
+
 	// Obtain private IPs, NetworkId and zone
-	// Get hatoba nodes
-	clusters, err := c.cloud.ListClusters(c.ctx)
-	if err != nil {
-		return fmt.Errorf("getting cluster list : %s", err.Error())
-	}
-	clusterName := ""
-	for _, cl := range clusters {
-		vmFound := 0
-		zone := ""
-		for _, p := range cl.NodePools {
-			for _, n := range p.Nodes {
-				for i, nc := range c.nodes {
-					if pstr(n.PublicIpAddress) == nc.publicIP {
-						vmFound++
-						c.nodes[i].privateIP = pstr(n.PrivateIpAddress)
-						zone = pstr(n.AvailabilityZone)
+
+	if c.driver.config.Hatoba {
+		// Get hatoba nodes
+		clusters, err := c.cloud.ListClusters(c.ctx)
+		if err != nil {
+			return fmt.Errorf("getting cluster list : %s", err.Error())
+		}
+		clusterName := ""
+		for _, cl := range clusters {
+			vmFound := 0
+			zone := ""
+			for _, p := range cl.NodePools {
+				for _, n := range p.Nodes {
+					for i, nc := range c.nodes {
+						if pstr(n.PublicIpAddress) == nc.publicIP {
+							vmFound++
+							c.nodes[i].privateIP = pstr(n.PrivateIpAddress)
+							zone = pstr(n.AvailabilityZone)
+						}
 					}
 				}
 			}
-		}
-		if vmFound == len(c.nodes) {
-			if configureClasses {
-				c.networkID = pstr(cl.NetworkConfig.NetworkId)
-				c.zone = zone
+			if vmFound == len(c.nodes) {
+				clusterName = *cl.Name
+				if configureClasses || configureSnapClass {
+					c.networkID = pstr(cl.NetworkConfig.NetworkId)
+					c.zone = zone
+					c.clusterName = clusterName
+				}
+				break
 			}
-			clusterName = *cl.Name
-			break
 		}
-	}
-
-	// Get computing instances
-	if clusterName == "" {
+		if clusterName != "" {
+			glog.V(4).Infof("Configurator : found corresponding cluster %s", clusterName)
+		} else {
+			return fmt.Errorf("nodes not found in hatoba")
+		}
+	} else {
+		// Get computing instances
 		vms, err := c.cloud.ListInstances(c.ctx)
 		if err != nil {
 			return fmt.Errorf("getting vm list : %s", err.Error())
@@ -133,6 +152,7 @@ func (c *Configurator) configure(configureClasses bool) error {
 		vmFound := 0
 		networkID := ""
 		zone := ""
+		clusterName := ""
 		for _, vm := range vms {
 			for i, nc := range c.nodes {
 				if pstr(vm.IpAddress) == nc.publicIP {
@@ -145,20 +165,23 @@ func (c *Configurator) configure(configureClasses bool) error {
 					if vm.Placement != nil {
 						zone = pstr(vm.Placement.AvailabilityZone)
 					}
+					if clusterName != "" {
+						clusterName += "-"
+					}
+					clusterName += pstr(vm.InstanceId)
 					vmFound++
 				}
 			}
 		}
 		if vmFound == len(c.nodes) && networkID != "" && zone != "" {
-			if configureClasses {
+			if configureClasses || configureSnapClass {
 				c.networkID = networkID
 				c.zone = zone
+				c.clusterName = clusterName
 			}
 		} else {
-			return fmt.Errorf("nodes not found in computing / hatoba")
+			return fmt.Errorf("nodes not found in computing")
 		}
-	} else {
-		glog.V(4).Infof("Configurator : found corresponding cluster %s", clusterName)
 	}
 
 	glog.V(4).Infof("Configurator : private NetworkId=%s zone=%s", c.networkID, c.zone)
@@ -168,7 +191,10 @@ func (c *Configurator) configure(configureClasses bool) error {
 
 	if c.networkID == "net-COMMON_PRIVATE" {
 		c.cidr = ""
-	} else if configureClasses {
+
+	} else if configureClasses && c.driver.config.CidrBlkRcmd {
+
+		// Experimental : Cidr block recommendation
 
 		// Get Private Lan and prepare recommended cidr divs
 		lan, err := c.cloud.GetPrivateLan(c.ctx, c.networkID)
@@ -249,7 +275,7 @@ func (c *Configurator) configure(configureClasses bool) error {
 		glog.V(4).Infof("Configurator : determined recommended CIDR block for NAS %s", c.cidr)
 	}
 
-	err = c.setNodeConfigs()
+	err := c.setNodeConfigs()
 	if err != nil {
 		return fmt.Errorf("saving node configs : %s", err.Error())
 	}
@@ -258,6 +284,13 @@ func (c *Configurator) configure(configureClasses bool) error {
 		err = c.setStorageClasses()
 		if err != nil {
 			return fmt.Errorf("saving class configs : %s", err.Error())
+		}
+	}
+
+	if configureSnapClass {
+		err = c.setSnapshotClasses()
+		if err != nil {
+			return fmt.Errorf("saving snapshot secret : %s", err.Error())
 		}
 	}
 
@@ -418,11 +451,14 @@ func (c *Configurator) setStorageClasses() error {
 		if cl.Provisioner != c.driver.config.Name {
 			continue
 		}
-		if cl.Parameters["zone"] == c.zone || cl.Parameters["networkId"] == c.networkID {
+		if cl.Parameters["zone"] == c.zone && cl.Parameters["networkId"] == c.networkID {
 			continue
 		}
 		cl.Parameters["zone"] = c.zone
 		cl.Parameters["networkId"] = c.networkID
+		if cl.Parameters["description"] == "" && c.clusterName != "" {
+			cl.Parameters["description"] = "csi-volume of cluster:" + c.clusterName
+		}
 		// Do not overwrite existing cidr
 		if c.cidr != "" && cl.Parameters["reservedIpv4Cidr"] == "" {
 			cl.Parameters["reservedIpv4Cidr"] = c.cidr
@@ -515,6 +551,168 @@ func (c *Configurator) installStorageClasses() error {
 		glog.V(4).Infof("Configurator : storageclass csi-nifcloud-nas-shrdhi installed")
 	}
 
+	return nil
+}
+
+func (c *Configurator) getSnapshotClasses() (bool, error) {
+
+	mustUpdate := true
+	// Get CR snapshotv1.volumesnapshotclasses
+	cls, err := c.driver.config.SnapClient.SnapshotV1().VolumeSnapshotClasses().List(c.ctx, metav1.ListOptions{})
+	if err != nil {
+		return false, fmt.Errorf("getting snapshotclasses in getSnapshotClasses : %s", err.Error())
+	}
+	for _, cl := range cls.Items {
+		if cl.Driver != c.driver.config.Name {
+			continue
+		}
+		secrets, err := getSecretsFromSnapshotClass(c.ctx, cl.GetName(), c.driver)
+		if err == nil && secrets["resticRepository"] != "" && secrets["resticPassword"] != "" {
+			mustUpdate = false
+		}
+	}
+	return mustUpdate, nil
+}
+
+/*
+func (c *Configurator) getSnapshotBucket() (string, error) {
+	// creds
+	accesskey := os.Getenv("AWS_ACCESS_KEY_ID")
+	if accesskey == "" {
+		return "", fmt.Errorf("cannot get accesskey from env or secrets")
+	}
+	secretkey := os.Getenv("AWS_SECRET_ACCESS_KEY")
+	if secretkey == "" {
+		return "", fmt.Errorf("cannot get secretkey from env or secrets")
+	}
+	// session
+	ep := c.driver.config.DefaultSnapRegion + ".storage.api.nifcloud.com"
+	creds := credentials.NewStaticCredentials(accesskey, secretkey, "")
+	sess, err := session.NewSession(&aws.Config{
+		Credentials: creds,
+		Region:      aws.String(c.driver.config.DefaultSnapRegion),
+		Endpoint:    &ep,
+	})
+	svc := s3.New(sess)
+	// list buckets
+	result, err := svc.ListBuckets(nil)
+	if err != nil {
+		return "", fmt.Errorf("cannot list buckets : %s", err.Error())
+	}
+	for _, bu := range result.Buckets {
+		name := aws.StringValue(bu.Name)
+		if strings.HasPrefix(name, "csi-snapshot-") {
+			return name, nil
+		}
+	}
+
+	return "csi-snapshot-" + rand.String(5), nil
+}*/
+
+func (c *Configurator) setSnapshotClasses() error {
+
+	clusterID := ""
+	if c.clusterName != "" {
+		clusterID = c.clusterName + "-"
+	}
+	clusterUID, err := getNamespaceUID(c.ctx, "kube-system", c.driver)
+	if err != nil {
+		return fmt.Errorf("Error getting namespace UID : %s", err.Error())
+	}
+	clusterID += clusterUID
+	//bucketname, err := c.getSnapshotBucket()
+	//if err != nil {
+	//	return fmt.Errorf("Error getting snapshot bucket : %s", err.Error())
+	//}
+	bucketname := "csi-snapshot-" + rand.String(5)
+	//repository := "s3:" + c.driver.config.DefaultSnapRegion + ".storage.api.nifcloud.com/" +
+	//	bucketname + "/" + clusterID
+	repository := "s3:" + c.driver.config.DefaultSnapRegion + ".storage.api.nifcloud.com/" + bucketname
+	password := makePassword(clusterUID, 16)
+
+	cls, err := c.driver.config.SnapClient.SnapshotV1().VolumeSnapshotClasses().List(c.ctx, metav1.ListOptions{})
+	if err != nil {
+		return fmt.Errorf("getting storageclasses in setSnapshotClasses : %s", err.Error())
+	}
+	// Create a secret for the snapshotclass
+	for _, cl := range cls.Items {
+		if cl.Driver != c.driver.config.Name {
+			continue
+		}
+		secrets, err := getSecretsFromSnapshotClass(c.ctx, cl.GetName(), c.driver)
+		if err == nil && secrets["resticRepository"] != "" && secrets["resticPassword"] != "" {
+			continue
+		}
+		if cl.Parameters["csi.storage.k8s.io/snapshotter-secret-name"] != "restic-creds" {
+			continue
+		}
+		if cl.Parameters["csi.storage.k8s.io/snapshotter-secret-namespace"] != "nifcloud-nas-csi-driver" {
+			continue
+		}
+		// delete existing secret
+		_, err = c.kubeClient.CoreV1().Secrets("nifcloud-nas-csi-driver").Get(
+			c.ctx, "restic-creds", metav1.GetOptions{})
+		if err == nil {
+			err := c.kubeClient.CoreV1().Secrets("nifcloud-nas-csi-driver").Delete(
+				c.ctx, "restic-creds", metav1.DeleteOptions{})
+			if err != nil {
+				return fmt.Errorf("deleting secret in setSnapshotClasses : %s", err.Error())
+			}
+		}
+		// create new secret
+		newSecret := &corev1.Secret{
+			TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "Secret"},
+			ObjectMeta: metav1.ObjectMeta{Name: "restic-creds"},
+			StringData: map[string]string{
+				"resticRepository": repository,
+				"resticPassword":   password,
+			},
+		}
+		_, err = c.kubeClient.CoreV1().Secrets("nifcloud-nas-csi-driver").Create(
+			c.ctx, newSecret, metav1.CreateOptions{})
+		if err != nil {
+			return fmt.Errorf("Error creating secret in setSnapshotClasses : %s", err.Error())
+		}
+		break
+	}
+
+	glog.V(4).Infof("Configurator : snapshot classes updated")
+	return nil
+}
+
+func (c *Configurator) installSnapshotClasses() error {
+
+	// Get CR snapshotv1.snapshotclasses
+	cls, err := c.driver.config.SnapClient.SnapshotV1().VolumeSnapshotClasses().List(c.ctx, metav1.ListOptions{})
+	if err != nil {
+		return fmt.Errorf("getting snapshotclasses in installSnapshotClasses : %s", err.Error())
+	}
+	found := false
+	for _, cl := range cls.Items {
+		if cl.Driver == c.driver.config.Name {
+			found = true
+			break
+		}
+	}
+	if !found {
+		// Create a class
+		newClass := &snapshotv1.VolumeSnapshotClass{
+			TypeMeta:       metav1.TypeMeta{APIVersion: "snapshot.storage.k8s.io/v1", Kind: "VolumeStorageClass"},
+			ObjectMeta:     metav1.ObjectMeta{Name: "csi-nifcloud-nas-restic"},
+			Driver:         c.driver.config.Name,
+			DeletionPolicy: "Delete",
+			Parameters: map[string]string{
+				"csi.storage.k8s.io/snapshotter-secret-name":      "restic-creds",
+				"csi.storage.k8s.io/snapshotter-secret-namespace": "nifcloud-nas-csi-driver",
+			},
+		}
+		_, err = c.driver.config.SnapClient.SnapshotV1().VolumeSnapshotClasses().Create(
+			c.ctx, newClass, metav1.CreateOptions{})
+		if err != nil {
+			return fmt.Errorf("creating snapshotclass in installSnapshotClasses : %s", err.Error())
+		}
+		glog.V(4).Infof("Configurator : snapshotclass csi-nifcloud-nas-restic installed")
+	}
 	return nil
 }
 
