@@ -37,6 +37,7 @@ func TestConfigurator(t *testing.T) {
 		actions   []string
 		postConf  *Configurator
 		update    bool
+		hatoba    bool
 	}{
 		"init private LAN": {
 			instances: []computing.InstancesSet{
@@ -62,7 +63,6 @@ func TestConfigurator(t *testing.T) {
 				newStorageClass("testStorageClass", "testZone", "", ""),
 			},
 			actions: []string{
-				"ListClusters",
 				"ListInstances",
 				"GetPrivateLan/net-TestPrivate",
 				"ListRdbInstances",
@@ -91,7 +91,6 @@ func TestConfigurator(t *testing.T) {
 				newStorageClass("testStorageClass", "testZone", "", ""),
 			},
 			actions: []string{
-				"ListClusters",
 				"ListInstances",
 			},
 			postConf: &Configurator{
@@ -105,6 +104,7 @@ func TestConfigurator(t *testing.T) {
 			},
 		},
 		"init hatoba private LAN": {
+			hatoba: true,
 			nodes: []hatoba.Node{
 				initNode("111.0.0.1", "192.168.0.1", "testZone"),
 				initNode("111.0.0.2", "192.168.0.2", "testZone"),
@@ -138,9 +138,10 @@ func TestConfigurator(t *testing.T) {
 			},
 		},
 		"not found": {
-			errmsg: "nodes not found in computing / hatoba",
+			errmsg: "nodes not found in computing",
 		},
 		"private LAN not found": {
+			hatoba: true,
 			nodes: []hatoba.Node{
 				initNode("111.0.0.1", "192.168.0.1", "testZone"),
 				initNode("111.0.0.2", "192.168.0.2", "testZone"),
@@ -174,6 +175,7 @@ func TestConfigurator(t *testing.T) {
 			},
 		},
 		"update node added": {
+			hatoba: true,
 			update: true,
 			nodes: []hatoba.Node{
 				initNode("111.0.0.1", "192.168.0.1", "testZone"),
@@ -204,6 +206,7 @@ func TestConfigurator(t *testing.T) {
 			},
 		},
 		"update zone/networkId different between classes": {
+			hatoba: true,
 			update: true,
 			nodes: []hatoba.Node{
 				initNode("111.0.0.1", "192.168.0.1", "testZone"),
@@ -231,6 +234,7 @@ func TestConfigurator(t *testing.T) {
 			},
 		},
 		"init cidr block too small": {
+			hatoba: true,
 			nodes: []hatoba.Node{
 				initNode("111.0.0.1", "192.168.0.1", "testZone"),
 				initNode("111.0.0.2", "192.168.0.2", "testZone"),
@@ -247,6 +251,7 @@ func TestConfigurator(t *testing.T) {
 			errmsg: "initialing recommended cidr divs : mask offset must be positive value",
 		},
 		"init cannot determine cidr": {
+			hatoba: true,
 			nodes: []hatoba.Node{
 				initNode("111.0.0.1", "192.168.0.1", "testZone"),
 				initNode("111.0.0.2", "192.168.0.2", "testZone"),
@@ -302,6 +307,8 @@ func TestConfigurator(t *testing.T) {
 		t.Logf("====== Test case [%s] :", name)
 
 		conf, _, cloud := initTestConfigurator(t, c.preObj)
+		conf.driver.config.Hatoba = c.hatoba
+		conf.driver.config.CidrBlkRcmd = true
 		cloud.Instances = c.instances
 		initCluster("testCluster", c.networkID, c.nodes)
 		cidrBlock = c.lanCidr
@@ -369,6 +376,7 @@ func TestRunConfigurator(t *testing.T) {
 		Cloud:         cloud,
 		InitBackoff:   1,
 		Configurator:  true,
+		Hatoba:        true,
 	}
 
 	driver, _ := NewNifcloudNasDriver(config)
@@ -392,6 +400,7 @@ func TestRunConfigurator(t *testing.T) {
 	// check storage class parameters
 	exp := newStorageClass("csi-nifcloud-nas-std", "testZone", "net-COMMON_PRIVATE", "")
 	exp.Parameters["instanceType"] = "0"
+	exp.Parameters["description"] = "csi-volume of cluster:testCluster"
 	got, err := kubeClient.StorageV1().StorageClasses().Get(context.TODO(), "csi-nifcloud-nas-std", metav1.GetOptions{})
 	if err != nil {
 		t.Errorf("error getting storageclass : %s", err.Error())

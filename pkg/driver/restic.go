@@ -3,6 +3,7 @@ package driver
 import (
 	"bufio"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -17,6 +18,11 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/credentials"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/s3"
 )
 
 // ResticSnapshot holds informations of a restic snapshot
@@ -93,10 +99,18 @@ type restic struct {
 func newRestic(secrets map[string]string) (*restic, error) {
 
 	if secrets["accesskey"] == "" {
-		return nil, fmt.Errorf("'accesskey' not found in restic secrets")
+		accesskey := os.Getenv("AWS_ACCESS_KEY_ID")
+		if accesskey == "" {
+			return nil, fmt.Errorf("cannot get accesskey from env or secrets")
+		}
+		secrets["accesskey"] = accesskey
 	}
 	if secrets["secretkey"] == "" {
-		return nil, fmt.Errorf("'secretkey' not found in restic secrets")
+		secretkey := os.Getenv("AWS_SECRET_ACCESS_KEY")
+		if secretkey == "" {
+			return nil, fmt.Errorf("cannot get secretkey from env or secrets")
+		}
+		secrets["secretkey"] = secretkey
 	}
 	if secrets["resticRepository"] == "" {
 		return nil, fmt.Errorf("'resticRepository' not found in restic secrets")
@@ -110,7 +124,7 @@ func newRestic(secrets map[string]string) (*restic, error) {
 		accesskey:  secrets["accesskey"],
 		secretkey:  secrets["secretkey"],
 		repository: secrets["resticRepository"],
-		image:      "fj3817ia/restic-scratch:0.9.6b",
+		image:      "restic/restic:0.12.0",
 	}, nil
 }
 
@@ -143,12 +157,14 @@ func doResticJob(ctx context.Context, job *batchv1.Job,
 
 	// Create job
 	var dp metav1.DeletionPropagation = metav1.DeletePropagationForeground
+	var gps int64 = 0
 	_, err = kubeClient.BatchV1().Jobs(namespace).Create(ctx, job, metav1.CreateOptions{})
 	if err != nil {
 		if !errors.IsAlreadyExists(err) {
 			return "", fmt.Errorf("Creating restic job error - %s", err.Error())
 		}
-		err = kubeClient.BatchV1().Jobs(namespace).Delete(ctx, name, metav1.DeleteOptions{PropagationPolicy: &dp})
+		err = kubeClient.BatchV1().Jobs(namespace).Delete(
+			ctx, name, metav1.DeleteOptions{PropagationPolicy: &dp, GracePeriodSeconds: &gps})
 		if err != nil {
 			glog.Warningf("error deleting job %s in doResticJob : %s", name, err.Error())
 		}
@@ -158,13 +174,16 @@ func doResticJob(ctx context.Context, job *batchv1.Job,
 		}
 	}
 	defer func() {
-		err := kubeClient.BatchV1().Jobs(namespace).Delete(ctx, name, metav1.DeleteOptions{PropagationPolicy: &dp})
+		err := kubeClient.BatchV1().Jobs(namespace).Delete(
+			ctx, name, metav1.DeleteOptions{PropagationPolicy: &dp, GracePeriodSeconds: &gps})
 		if err != nil {
 			glog.Warningf("error deleting job %s in doResticJob : %s", name, err.Error())
 		}
 	}()
 
 	// wait for job completed with backoff retry
+	var errBuf error
+	errBuf = nil
 	b := backoff.NewExponentialBackOff()
 	b.MaxElapsedTime = time.Duration(30) * time.Minute
 	b.RandomizationFactor = 0.2
@@ -185,7 +204,7 @@ func doResticJob(ctx context.Context, job *batchv1.Job,
 	}
 	err = backoff.RetryNotify(chkJobCompleted, b, retryNotifyRestic)
 	if err != nil {
-		return "", fmt.Errorf("Error doing restic job - %s", err.Error())
+		errBuf = fmt.Errorf("Error doing restic job - %s", err.Error())
 	}
 
 	// Get logs
@@ -219,9 +238,12 @@ func doResticJob(ctx context.Context, job *batchv1.Job,
 						out = testResticPodLog[name]
 					}
 				}
-				if err != nil || strings.Contains(out, "summary") {
+				if err != nil || strings.Contains(out, "summary") || strings.Contains(out, "Fatal:") {
 					break
 				}
+			}
+			if errBuf != nil {
+				return "", fmt.Errorf("%s : %s", out, errBuf.Error())
 			}
 			return out, nil
 		}
@@ -278,6 +300,95 @@ func (r *restic) resticJobDelete(snapshotID string) (*batchv1.Job, *corev1.Secre
 	return job, r.resticSecret("default")
 }
 
+// restic init
+func (r *restic) resticJobInit() (*batchv1.Job, *corev1.Secret) {
+	job := r.resticJob("restic-job-init", "default")
+	job.Spec.Template.Spec.Containers[0].Args = append(
+		job.Spec.Template.Spec.Containers[0].Args,
+		[]string{"init"}...,
+	)
+	return job, r.resticSecret("default")
+}
+
+func parseRepositry(s string) (string, string, string, error) {
+	switch {
+	case strings.HasPrefix(s, "s3:https//"):
+		s = s[10:]
+	case strings.HasPrefix(s, "s3:http//"):
+		s = s[9:]
+	case strings.HasPrefix(s, "s3://"):
+		s = s[5:]
+	case strings.HasPrefix(s, "s3:"):
+		s = s[3:]
+	default:
+		return "", "", "", fmt.Errorf("repository invalid format")
+	}
+	path := strings.SplitN(s, "/", 3)
+	if len(path) < 2 {
+		return "", "", "", fmt.Errorf("cannot parse endpoint and bucket from repository")
+	}
+	prefix := ""
+	if len(path) > 2 {
+		prefix = path[2]
+	}
+	return path[0], path[1], prefix, nil
+}
+
+func (r *restic) checkBucket() error {
+
+	// get endpoint, bucket and region
+	ep, bucket, _, err := parseRepositry(r.repository)
+	if err != nil {
+		return err
+	}
+	// Set default location to avoid sending LocationConstraint option
+	// which causes some region problems in creating Nifcloud Object Storage bucket
+	region := "us-east-1"
+	// session
+	creds := credentials.NewStaticCredentials(r.accesskey, r.secretkey, "")
+	sess, err := session.NewSession(&aws.Config{
+		Credentials: creds,
+		Region:      aws.String(region),
+		Endpoint:    &ep,
+	})
+	if err != nil {
+		return err
+	}
+	svc := s3.New(sess)
+	// list buckets
+	result, err := svc.ListBuckets(nil)
+	if err != nil {
+		return err
+	}
+	for _, bu := range result.Buckets {
+		if aws.StringValue(bu.Name) == bucket {
+			glog.Infof("bucket %s found", bucket)
+			return nil
+		}
+	}
+	// Create bucket
+	glog.Infof("creating bucket %s in location %s", bucket, region)
+	req, _ := svc.CreateBucketRequest(&s3.CreateBucketInput{
+		Bucket: aws.String(bucket),
+	})
+	req.HTTPRequest.Header.Set("Accept-Encoding", "identity")
+	err = req.Send()
+	if err != nil {
+		return err
+	}
+	// wait for propagation of new bucket
+	glog.Infof("waiting for bucket %s available", bucket)
+	err = svc.WaitUntilBucketExists(&s3.HeadBucketInput{
+		Bucket: aws.String(bucket),
+	})
+	if err != nil {
+		return err
+	}
+	time.Sleep(30 * time.Second)
+
+	return nil
+}
+
 // restic restore
 func (r *restic) resticJobRestore(snapID, ip, path, snapPath string) (*batchv1.Job, *corev1.Secret) {
 	// Job
@@ -328,7 +439,7 @@ func (r *restic) resticSecret(namespace string) *corev1.Secret {
 // restic job pod
 func (r *restic) resticJob(name, namespace string) *batchv1.Job {
 
-	backoffLimit := int32(2)
+	backoffLimit := int32(0)
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,

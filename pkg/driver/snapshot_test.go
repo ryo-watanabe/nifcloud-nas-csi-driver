@@ -8,8 +8,8 @@ import (
 
 	csi "github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/golang/protobuf/ptypes"
-	snapv1 "github.com/kubernetes-csi/external-snapshotter/client/v3/apis/volumesnapshot/v1beta1"
-	snapfake "github.com/kubernetes-csi/external-snapshotter/client/v3/clientset/versioned/fake"
+	snapv1 "github.com/kubernetes-csi/external-snapshotter/client/v4/apis/volumesnapshot/v1"
+	snapfake "github.com/kubernetes-csi/external-snapshotter/client/v4/clientset/versioned/fake"
 	"github.com/ryo-watanabe/nifcloud-nas-csi-driver/pkg/util"
 	"golang.org/x/net/context"
 	batchv1 "k8s.io/api/batch/v1"
@@ -90,12 +90,12 @@ func TestCreateSnapshot(t *testing.T) {
 				Name:           "testSnapshot",
 				SourceVolumeId: "pvc-TESTPVCUID",
 			},
-			errmsg: "Error configure restic job : 'accesskey' not found in restic secrets",
+			errmsg: "Error configure restic job : cannot get accesskey from env or secrets",
 		},
 		"snapshot job failed": {
 			obj: []runtime.Object{
 				newPVC("testpvc", "10Gi", "TESTPVCUID"),
-				newPod("jobpod-backup", "default", "restic-job-backup-pvc-TESTPVCUID"),
+				newPod("jobpod-list", "default", "restic-job-list-snapshots"),
 			},
 			req: &csi.CreateSnapshotRequest{
 				Name:           "testSnapshot",
@@ -108,28 +108,29 @@ func TestCreateSnapshot(t *testing.T) {
 				},
 			},
 			jobFailed: true,
-			errmsg:    "Error running backup job : Error doing restic job - Job restic-job-backup-pvc-TESTPVCUID failed",
+			errmsg:    "Error doing restic job - Job restic-job-list-snapshots failed",
 		},
-		"snapshot summary parse failed": {
-			obj: []runtime.Object{
-				newPVC("testpvc", "10Gi", "TESTPVCUID"),
-				newPod("jobpod-backup", "default", "restic-job-backup-pvc-TESTPVCUID"),
-			},
-			podLogs: map[string]string{
-				"restic-job-backup-pvc-TESTPVCUID": "fake logs",
-			},
-			req: &csi.CreateSnapshotRequest{
-				Name:           "testSnapshot",
-				SourceVolumeId: "pvc-TESTPVCUID",
-				Secrets: map[string]string{
-					"accesskey":        "testAccessKey",
-					"secretkey":        "testSecretKey",
-					"resticRepository": "testResticRepository",
-					"resticPassword":   "testResticPassword",
+		/*
+			"snapshot summary parse failed": {
+				obj: []runtime.Object{
+					newPVC("testpvc", "10Gi", "TESTPVCUID"),
+					newPod("jobpod-backup", "default", "restic-job-backup-pvc-TESTPVCUID"),
 				},
-			},
-			errmsg: "Error persing restic backup summary : invalid character 'k' in literal false",
-		},
+				podLogs: map[string]string{
+					"restic-job-backup-pvc-TESTPVCUID": "fake logs",
+				},
+				req: &csi.CreateSnapshotRequest{
+					Name:           "testSnapshot",
+					SourceVolumeId: "pvc-TESTPVCUID",
+					Secrets: map[string]string{
+						"accesskey":        "testAccessKey",
+						"secretkey":        "testSecretKey",
+						"resticRepository": "testResticRepository",
+						"resticPassword":   "testResticPassword",
+					},
+				},
+				errmsg: "Error persing restic backup summary : invalid character 'k' in literal false",
+			},*/
 	}
 
 	flagVSet("4")
@@ -372,7 +373,7 @@ var (
 	}
 	snapshotContent = &snapv1.VolumeSnapshotContent{
 		TypeMeta: metav1.TypeMeta{
-			APIVersion: "snapshot.storage.k8s.io/v1beta1",
+			APIVersion: "snapshot.storage.k8s.io/v1",
 			Kind:       "VolumeSnapshotContent",
 		},
 		ObjectMeta: metav1.ObjectMeta{
@@ -387,7 +388,7 @@ var (
 	}
 	snapshotClass = &snapv1.VolumeSnapshotClass{
 		TypeMeta: metav1.TypeMeta{
-			APIVersion: "snapshot.storage.k8s.io/v1beta1",
+			APIVersion: "snapshot.storage.k8s.io/v1",
 			Kind:       "VolumeSnapshotClass",
 		},
 		ObjectMeta: metav1.ObjectMeta{

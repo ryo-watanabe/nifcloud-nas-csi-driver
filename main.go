@@ -22,7 +22,7 @@ import (
 	"os"
 
 	"github.com/golang/glog"
-	clientset "github.com/kubernetes-csi/external-snapshotter/client/v3/clientset/versioned"
+	clientset "github.com/kubernetes-csi/external-snapshotter/client/v4/clientset/versioned"
 	"github.com/ryo-watanabe/nifcloud-nas-csi-driver/pkg/cloud"
 	"github.com/ryo-watanabe/nifcloud-nas-csi-driver/pkg/driver"
 	"k8s.io/client-go/kubernetes"
@@ -40,11 +40,15 @@ var (
 	runController = flag.Bool("controller", false, "run controller service")
 	runNode       = flag.Bool("node", false, "run node service")
 	privateIPReg  = flag.Bool("privateipreg", false, "get private ip from network interface")
+	cidrBlkRcmd   = flag.Bool("recommendcidr", false, "configure recommended cidr block (experimental)")
+	cfgSnapRepo   = flag.Bool("cfgsnaprepo", false, "auto configure snapshot repository (experimental)")
+	hatoba        = flag.Bool("hatoba", true, "for clusters of nifcloud hatoba")
 	configurator  = flag.Bool("configurator", true, "run configurator")
 	restoreClstID = flag.Bool("restoreclstid", true, "restore NASSecurityGroup name on starting of controller")
 	devcloudep    = flag.String("devcloudep", "", "dev cloud endpoint")
+	defsnapregion = flag.String("defaultsnapregion", "jp-east-2", "snapshot objectstore region used in configurator")
 
-	version  = "v0.5.0a"
+	version  = "v0.6.0b"
 	revision = "undef"
 )
 
@@ -91,19 +95,23 @@ func main() {
 	}
 	mounter := mount.New("")
 	config := &driver.NifcloudNasDriverConfig{
-		Name:          driverName,
-		Version:       version,
-		NodeID:        *nodeID,
-		PrivateIfName: *privateIfName,
-		RunController: *runController,
-		RunNode:       *runNode,
-		Mounter:       mounter,
-		Cloud:         provider,
-		KubeClient:    kubeClient,
-		SnapClient:    snapClient,
-		PrivateIPReg:  *privateIPReg,
-		Configurator:  *configurator,
-		RestoreClstID: *restoreClstID,
+		Name:              driverName,
+		Version:           version,
+		NodeID:            *nodeID,
+		PrivateIfName:     *privateIfName,
+		RunController:     *runController,
+		RunNode:           *runNode,
+		Mounter:           mounter,
+		Cloud:             provider,
+		KubeClient:        kubeClient,
+		SnapClient:        snapClient,
+		PrivateIPReg:      *privateIPReg,
+		Configurator:      *configurator,
+		RestoreClstID:     *restoreClstID,
+		Hatoba:            *hatoba,
+		CidrBlkRcmd:       *cidrBlkRcmd,
+		CfgSnapRepo:       *cfgSnapRepo,
+		DefaultSnapRegion: *defsnapregion,
 	}
 
 	nfnsDriver, err := driver.NewNifcloudNasDriver(config)

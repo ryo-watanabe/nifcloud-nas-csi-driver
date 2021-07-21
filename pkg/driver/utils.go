@@ -1,7 +1,11 @@
 package driver
 
 import (
+	"crypto/md5" //nolint:gosec
+	"encoding/hex"
 	"fmt"
+	"math/big"
+	"math/rand" //nolint:gosec
 	"net"
 	"sync"
 
@@ -205,4 +209,26 @@ func (q *OperateResourceQueue) UnsetQueue(name string) {
 	}
 	delete(q.resources, name)
 	q.queueMutex.Unlock()
+}
+
+const letters = "abcdefghijklmnopqrstuvwxyz0123456789"
+
+// MakePassword generates length n password from str
+func makePassword(str string, n int) string {
+
+	// md5 of the string
+	sum := md5.Sum([]byte(str)) //nolint:gosec
+	hexstr := hex.EncodeToString(sum[:])
+
+	// get random seed with big
+	bi := big.NewInt(0)
+	bi.SetString(hexstr, 16)
+
+	// generate password
+	rand.Seed(bi.Int64())
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = letters[rand.Intn(len(letters))] //nolint:gosec
+	}
+	return string(b)
 }
