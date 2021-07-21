@@ -61,12 +61,14 @@ volumeMounts:
 #### Setup and deploy node
 ```
 $ kubectl apply -f manifests/setup.yaml
+$ kubectl apply -f manifests/snapshot/setup-snapshot.yaml
 $ kubectl apply -f manifests/CSIDriver.yaml
+
 $ kubectl apply -f manifests/node.yaml
 ```
 #### Credentials
 
-Set access/secret keys in a secret of the account with full access for NAS and NAS Firewall.
+Set access/secret keys in a secret of the account with full access for NAS, NAS Firewall and Storage.
 ```
 apiVersion: v1
 kind: Secret
@@ -213,10 +215,10 @@ spec:
 - IP address like "192.168.10.64" can be used same as "192.168.10.64/32"
 - If no annotations set, StorageClass parameter reservedIPv4Cidr is used for private IP selection
 
-## Volume Snapshots
+# Volume Snapshots
 
-### How to Deploy
-CRDs & controller
+## Setup
+Install CRDs & controller (external-snapshotter : release-4.1)
 ```
 kubectl apply -f https://raw.githubusercontent.com/kubernetes-csi/external-snapshotter/release-4.1/client/config/crd/snapshot.storage.k8s.io_volumesnapshots.yaml
 kubectl apply -f https://raw.githubusercontent.com/kubernetes-csi/external-snapshotter/release-4.1/client/config/crd/snapshot.storage.k8s.io_volumesnapshotcontents.yaml
@@ -226,3 +228,123 @@ kubectl apply -f https://raw.githubusercontent.com/kubernetes-csi/external-snaps
 kubectl apply -f https://raw.githubusercontent.com/kubernetes-csi/external-snapshotter/release-4.1/deploy/kubernetes/snapshot-controller/setup-snapshot-controller.yaml
 ```
 
+VolumeSnapshotClass
+```
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshotClass
+metadata:
+  name: csi-nifcloud-nas-restic
+deletionPolicy: Delete
+driver: nas.csi.storage.nifcloud.com
+parameters:
+  csi.storage.k8s.io/snapshotter-secret-name: restic-creds
+  csi.storage.k8s.io/snapshotter-secret-namespace: nifcloud-nas-csi-driver
+```
+Snapshot Secret
+```
+apiVersion: v1
+kind: Secret
+metadata:
+  name: restic-creds
+  namespace: nifcloud-nas-csi-driver
+data:
+  resticPassword: c2h0ZnczaHZvMzZxYml0dw==
+  resticRepository: czM6anAtZWFzdC0yLnN0b3JhZ2UuYXBpLm5pZmNsb3VkLmNvbS9jc2ktc25hcHNob3QtOTVtaGg=
+type: Opaque
+```
+decoded parameters sample
+```
+resticReository: s3:jp-east-2.storage.api.nifcloud.com/csi-snapshot-95mhh
+resticPassword: shtfw3hvo36qbitw
+```
+## Taking a snapshot
+
+Create VolumeSnapshot
+```
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshot
+metadata:
+  name: data-snap
+  namespace: gitlab
+spec:
+  volumeSnapshotClassName: csi-nifcloud-nas-restic
+  source:
+    persistentVolumeClaimName: data
+```
+Then a snapshot of the PVC and a VoluemSnapshotContent created.
+
+VolumeSnapshot (Completed)
+```
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshot
+metadata:
+:
+  name: data-snap
+  namespace: gitlab
+:
+spec:
+  source:
+    persistentVolumeClaimName: data
+  volumeSnapshotClassName: csi-nifcloud-nas-restic
+status:
+  boundVolumeSnapshotContentName: snapcontent-07616eb3-181d-4c53-a967-8477508d5151
+  creationTime: "2021-07-21T03:13:28Z"
+  readyToUse: true
+  restoreSize: "174682946"
+```
+VolumeSnapshotContent
+```
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshotContent
+metadata:
+  name: snapcontent-07616eb3-181d-4c53-a967-8477508d5151
+:
+spec:
+  deletionPolicy: Delete
+  driver: nas.csi.storage.nifcloud.com
+  source:
+    volumeHandle: jp-east-1/cluster-943e1849-1bc9-4685-8c94-a7b49fcb87f2-shd0001-c4xbr/pvc-66abc38f-9a12-4522-8df6-6155b4a248c4
+  volumeSnapshotClassName: csi-nifcloud-nas-restic
+  volumeSnapshotRef:
+    apiVersion: snapshot.storage.k8s.io/v1
+    kind: VolumeSnapshot
+    name: data-snap
+    namespace: gitlab
+:
+status:
+  creationTime: 1626837208632037506
+  readyToUse: true
+  restoreSize: 174682946
+  snapshotHandle: e752c598
+```
+* snapshotHandle(=e752c598) is a snapshotID in the restic repository
+
+## Restoreing form a snapshot
+
+Create PVC with a dataSource
+```
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: data-restore
+  namespace: gitlab
+spec:
+  storageClassName: csi-nifcloud-nas-shrd
+  dataSource:
+    name: data-snap
+    kind: VolumeSnapshot
+    apiGroup: snapshot.storage.k8s.io
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 20Gi
+```
+Then restored PVC from the snapshot created
+```
+# kubectl get pvc -n gitlab
+NAME           STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS            AGE
+config         Bound    pvc-0ffa86c9-0fe1-41df-9df5-89d460d0cab8   1Gi        RWX            csi-nifcloud-nas-shrd   198d
+data           Bound    pvc-66abc38f-9a12-4522-8df6-6155b4a248c4   20Gi       RWX            csi-nifcloud-nas-shrd   198d
+data-restore   Bound    pvc-038f14d2-d4f9-4869-bb64-e0d139673ea4   20Gi       RWX            csi-nifcloud-nas-shrd   2m40s
+```

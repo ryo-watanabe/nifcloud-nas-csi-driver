@@ -6,6 +6,7 @@ on:
       - main
     paths-ignore:
     - '**.yml'
+    - '**.yaml'
     - '**.md'
   pull_request:
 jobs:
