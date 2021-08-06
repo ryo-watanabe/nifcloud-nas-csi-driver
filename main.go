@@ -41,14 +41,15 @@ var (
 	runNode       = flag.Bool("node", false, "run node service")
 	privateIPReg  = flag.Bool("privateipreg", false, "get private ip from network interface")
 	cidrBlkRcmd   = flag.Bool("recommendcidr", false, "configure recommended cidr block (experimental)")
-	cfgSnapRepo   = flag.Bool("cfgsnaprepo", false, "auto configure snapshot repository (experimental)")
-	hatoba        = flag.Bool("hatoba", true, "for clusters of nifcloud hatoba")
+	cfgSnapRepo   = flag.Bool("cfgsnaprepo", false, "auto configure snapshot repository")
+	hatoba        = flag.Bool("hatoba", false, "for clusters of nifcloud hatoba")
 	configurator  = flag.Bool("configurator", true, "run configurator")
 	restoreClstID = flag.Bool("restoreclstid", true, "restore NASSecurityGroup name on starting of controller")
-	devcloudep    = flag.String("devcloudep", "", "dev cloud endpoint")
-	defsnapregion = flag.String("defaultsnapregion", "jp-east-2", "snapshot objectstore region used in configurator")
+	devCloudEP    = flag.String("devcloudep", "", "dev cloud endpoint")
+	defSnapRegion = flag.String("defaultsnapregion", "jp-east-2", "snapshot objectstore region used in configurator")
+	clusterUID    = flag.String("clusteruid", "", "cluster UID default:kube-system namespace UID")
 
-	version  = "v0.6.0b"
+	version  = "v0.6.0c"
 	revision = "undef"
 )
 
@@ -88,7 +89,7 @@ func main() {
 
 	var provider cloud.Interface
 	if *runController {
-		provider, err = cloud.NewCloud(*region, *devcloudep)
+		provider, err = cloud.NewCloud(*region, *devCloudEP)
 		if err != nil {
 			glog.Fatalf("Failed to initialize cloud provider: %v", err)
 		}
@@ -111,7 +112,8 @@ func main() {
 		Hatoba:            *hatoba,
 		CidrBlkRcmd:       *cidrBlkRcmd,
 		CfgSnapRepo:       *cfgSnapRepo,
-		DefaultSnapRegion: *defsnapregion,
+		DefaultSnapRegion: *defSnapRegion,
+		ClusterUID:        *clusterUID,
 	}
 
 	nfnsDriver, err := driver.NewNifcloudNasDriver(config)

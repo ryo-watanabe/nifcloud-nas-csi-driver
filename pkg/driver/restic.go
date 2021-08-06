@@ -310,46 +310,47 @@ func (r *restic) resticJobInit() (*batchv1.Job, *corev1.Secret) {
 	return job, r.resticSecret("default")
 }
 
-func parseRepositry(s string) (string, string, string, error) {
+func parseRepositry(s string) (string, string, string, string, error) {
+	scheme := "https"
 	switch {
 	case strings.HasPrefix(s, "s3:https//"):
 		s = s[10:]
 	case strings.HasPrefix(s, "s3:http//"):
 		s = s[9:]
+		scheme = "http"
 	case strings.HasPrefix(s, "s3://"):
 		s = s[5:]
 	case strings.HasPrefix(s, "s3:"):
 		s = s[3:]
 	default:
-		return "", "", "", fmt.Errorf("repository invalid format")
+		return "", "", "", "", fmt.Errorf("repository invalid format")
 	}
 	path := strings.SplitN(s, "/", 3)
 	if len(path) < 2 {
-		return "", "", "", fmt.Errorf("cannot parse endpoint and bucket from repository")
+		return "", "", "", "", fmt.Errorf("cannot parse endpoint and bucket from repository")
 	}
 	prefix := ""
 	if len(path) > 2 {
 		prefix = path[2]
 	}
-	return path[0], path[1], prefix, nil
+	return path[0], path[1], prefix, scheme, nil
 }
 
 func (r *restic) checkBucket() error {
 
 	// get endpoint, bucket and region
-	ep, bucket, _, err := parseRepositry(r.repository)
+	ep, bucket, _, scheme, err := parseRepositry(r.repository)
 	if err != nil {
 		return err
 	}
-	// Set default location to avoid sending LocationConstraint option
-	// which causes some region problems in creating Nifcloud Object Storage bucket
-	region := "us-east-1"
+	eps := strings.SplitN(ep, ".", 2)
+	region := eps[0]
 	// session
 	creds := credentials.NewStaticCredentials(r.accesskey, r.secretkey, "")
 	sess, err := session.NewSession(&aws.Config{
 		Credentials: creds,
 		Region:      aws.String(region),
-		Endpoint:    &ep,
+		Endpoint:    aws.String(scheme + "://" + ep),
 	})
 	if err != nil {
 		return err
@@ -366,27 +367,8 @@ func (r *restic) checkBucket() error {
 			return nil
 		}
 	}
-	// Create bucket
-	glog.Infof("creating bucket %s in location %s", bucket, region)
-	req, _ := svc.CreateBucketRequest(&s3.CreateBucketInput{
-		Bucket: aws.String(bucket),
-	})
-	req.HTTPRequest.Header.Set("Accept-Encoding", "identity")
-	err = req.Send()
-	if err != nil {
-		return err
-	}
-	// wait for propagation of new bucket
-	glog.Infof("waiting for bucket %s available", bucket)
-	err = svc.WaitUntilBucketExists(&s3.HeadBucketInput{
-		Bucket: aws.String(bucket),
-	})
-	if err != nil {
-		return err
-	}
-	time.Sleep(30 * time.Second)
 
-	return nil
+	return fmt.Errorf("bucket not found")
 }
 
 // restic restore

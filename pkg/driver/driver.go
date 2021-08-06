@@ -53,6 +53,7 @@ type NifcloudNasDriverConfig struct {
 	CidrBlkRcmd       bool
 	CfgSnapRepo       bool
 	DefaultSnapRegion string
+	ClusterUID        string
 }
 
 // NifcloudNasDriver a CSI driver

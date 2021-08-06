@@ -1,11 +1,15 @@
 package driver
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"fmt"
 	"net"
-
-	//"os"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/golang/glog"
 	snapshotv1 "github.com/kubernetes-csi/external-snapshotter/client/v4/apis/volumesnapshot/v1"
@@ -17,10 +21,11 @@ import (
 	"k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/kubernetes"
 
-	//"github.com/aws/aws-sdk-go/aws"
-	//"github.com/aws/aws-sdk-go/aws/credentials"
-	//"github.com/aws/aws-sdk-go/aws/session"
-	//"github.com/aws/aws-sdk-go/service/s3"
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/credentials"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/s3"
+	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 	"github.com/nifcloud/nifcloud-sdk-go/service/computing"
 	"github.com/ryo-watanabe/nifcloud-nas-csi-driver/pkg/cloud"
 )
@@ -574,16 +579,15 @@ func (c *Configurator) getSnapshotClasses() (bool, error) {
 	return mustUpdate, nil
 }
 
-/*
-func (c *Configurator) getSnapshotBucket() (string, error) {
+func (c *Configurator) createBucket(bucketname string, secret *corev1.Secret) error {
 	// creds
 	accesskey := os.Getenv("AWS_ACCESS_KEY_ID")
 	if accesskey == "" {
-		return "", fmt.Errorf("cannot get accesskey from env or secrets")
+		return fmt.Errorf("cannot get accesskey from env or secrets")
 	}
 	secretkey := os.Getenv("AWS_SECRET_ACCESS_KEY")
 	if secretkey == "" {
-		return "", fmt.Errorf("cannot get secretkey from env or secrets")
+		return fmt.Errorf("cannot get secretkey from env or secrets")
 	}
 	// session
 	ep := c.driver.config.DefaultSnapRegion + ".storage.api.nifcloud.com"
@@ -593,21 +597,60 @@ func (c *Configurator) getSnapshotBucket() (string, error) {
 		Region:      aws.String(c.driver.config.DefaultSnapRegion),
 		Endpoint:    &ep,
 	})
+	// create bucket
 	svc := s3.New(sess)
-	// list buckets
-	result, err := svc.ListBuckets(nil)
+	_, err = svc.CreateBucket(&s3.CreateBucketInput{Bucket: aws.String(bucketname)})
 	if err != nil {
-		return "", fmt.Errorf("cannot list buckets : %s", err.Error())
-	}
-	for _, bu := range result.Buckets {
-		name := aws.StringValue(bu.Name)
-		if strings.HasPrefix(name, "csi-snapshot-") {
-			return name, nil
-		}
+		return err
 	}
 
-	return "csi-snapshot-" + rand.String(5), nil
-}*/
+	// prerare file for store secret
+	secretFile, err := os.Create("/tmp/" + secret.GetName() + ".tgz")
+	if err != nil {
+		return fmt.Errorf("Creating tgz file failed : %s", err.Error())
+	}
+	tgz := gzip.NewWriter(secretFile)
+	defer func() { _ = tgz.Close() }()
+	tarWriter := tar.NewWriter(tgz)
+	defer func() { _ = tarWriter.Close() }()
+	// Store secret resource as json
+	secretResource, err := json.Marshal(secret)
+	if err != nil {
+		return fmt.Errorf("Marshalling json failed : %s", err.Error())
+	}
+	hdr := &tar.Header{
+		Name:     filepath.Join("/", secret.GetName() + ".json"),
+		Size:     int64(len(secretResource)),
+		Typeflag: tar.TypeReg,
+		Mode:     0755,
+		ModTime:  time.Now(),
+	}
+	if err := tarWriter.WriteHeader(hdr); err != nil {
+		return fmt.Errorf("tar writer json file header failed : %s", err.Error())
+	}
+	if _, err := tarWriter.Write(secretResource); err != nil {
+		return fmt.Errorf("tar writer json content failed : %s", err.Error())
+	}
+	_ = tarWriter.Close()
+	_ = tgz.Close()
+	_ = secretFile.Close()
+	// upload secret json tgz
+	uploadFile, err := os.Open("/tmp/" + secret.GetName() + ".tgz")
+	defer func() { _ = uploadFile.Close() }()
+	if err != nil {
+		return fmt.Errorf("re-openning tgz file failed : %s", err.Error())
+	}
+	uploader := s3manager.NewUploader(sess)
+	_, err = uploader.Upload(&s3manager.UploadInput{
+		Bucket: aws.String(bucketname),
+		Key:    aws.String(secret.GetName() + ".tgz"),
+		Body:   uploadFile,
+	})
+	if err != nil {
+		return fmt.Errorf("Error uploading %s to bucket %s : %s", secret.GetName() + ".tgz", bucketname, err.Error())
+	}
+	return nil
+}
 
 func (c *Configurator) setSnapshotClasses() error {
 
@@ -615,18 +658,12 @@ func (c *Configurator) setSnapshotClasses() error {
 	if c.clusterName != "" {
 		clusterID = c.clusterName + "-"
 	}
-	clusterUID, err := getNamespaceUID(c.ctx, "kube-system", c.driver)
+	clusterUID, err := getClusterUID(c.ctx, c.driver)
 	if err != nil {
 		return fmt.Errorf("Error getting namespace UID : %s", err.Error())
 	}
 	clusterID += clusterUID
-	//bucketname, err := c.getSnapshotBucket()
-	//if err != nil {
-	//	return fmt.Errorf("Error getting snapshot bucket : %s", err.Error())
-	//}
 	bucketname := "csi-snapshot-" + rand.String(5)
-	//repository := "s3:" + c.driver.config.DefaultSnapRegion + ".storage.api.nifcloud.com/" +
-	//	bucketname + "/" + clusterID
 	repository := "s3:" + c.driver.config.DefaultSnapRegion + ".storage.api.nifcloud.com/" + bucketname
 	password := makePassword(clusterUID, 16)
 
@@ -662,16 +699,26 @@ func (c *Configurator) setSnapshotClasses() error {
 		// create new secret
 		newSecret := &corev1.Secret{
 			TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "Secret"},
-			ObjectMeta: metav1.ObjectMeta{Name: "restic-creds"},
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "restic-creds",
+				Annotations: map[string]string{
+					c.driver.config.Name + "/clusterID": clusterID,
+				},
+			},
 			StringData: map[string]string{
 				"resticRepository": repository,
 				"resticPassword":   password,
 			},
 		}
-		_, err = c.kubeClient.CoreV1().Secrets("nifcloud-nas-csi-driver").Create(
+		createdSecret, err := c.kubeClient.CoreV1().Secrets("nifcloud-nas-csi-driver").Create(
 			c.ctx, newSecret, metav1.CreateOptions{})
 		if err != nil {
 			return fmt.Errorf("Error creating secret in setSnapshotClasses : %s", err.Error())
+		}
+		// create new bucket and store the secret
+		err = c.createBucket(bucketname, createdSecret)
+		if err != nil {
+			return fmt.Errorf("Error creating bucket in setSnapshotClasses : %s", err.Error())
 		}
 		break
 	}
@@ -903,4 +950,9 @@ func (d *CidrDivs) dropWithIPRange(ipFrom, ipTo string) error {
 		}
 	}
 	return nil
+}
+
+func validateCIDRIP(cidrip string) error {
+	_, _, err := net.ParseCIDR(cidrip)
+	return err
 }

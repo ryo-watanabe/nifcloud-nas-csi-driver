@@ -69,7 +69,7 @@ func (s *controllerServer) convertSharedRequest(
 	}
 
 	// Get kube-system UID for cluster ID
-	clusterUID, err := getNamespaceUID(ctx, "kube-system", s.config.driver)
+	clusterUID, err := getClusterUID(ctx, s.config.driver)
 	if err != nil {
 		return "", 0, fmt.Errorf("Error getting namespace UID: %s", err.Error())
 	}
@@ -228,22 +228,45 @@ func getSharedNameFromExistingNas(
 	return nasName, false, nil
 }
 
-// Get namespace UID
-func getNamespaceUID(ctx context.Context, name string, driver *NifcloudNasDriver) (string, error) {
+// Return ClusterUID or kube-system namespace UID
+func getClusterUID(ctx context.Context, driver *NifcloudNasDriver) (string, error) {
+	if driver.config.ClusterUID != "" {
+		return driver.config.ClusterUID, nil
+	}
 	kubeClient := driver.config.KubeClient
-	ns, err := kubeClient.CoreV1().Namespaces().Get(ctx, name, metav1.GetOptions{})
+	ns, err := kubeClient.CoreV1().Namespaces().Get(ctx, "kube-system", metav1.GetOptions{})
 	if err != nil {
 		return "", fmt.Errorf("Error getting namespace : %s", err.Error())
 	}
 	return string(ns.ObjectMeta.GetUID()), nil
 }
 
-func makeSourcePath(ctx context.Context, ip, nasName, sourcePath string, driver *NifcloudNasDriver) error {
-	glog.V(5).Infof("Making source path: %s %s %s", ip, nasName, sourcePath)
+func makeSourcePath(ctx context.Context, ip, nasName, sourcePath, permission string, driver *NifcloudNasDriver) error {
+	glog.V(5).Infof("Making source path: %s %s %s permission=%s", ip, nasName, sourcePath, permission)
+	job := nfsJob(ip, "/", nasName, "default")
+	if permission == "" {
+		job.Spec.Template.Spec.Containers[0].Args = append(
+			job.Spec.Template.Spec.Containers[0].Args,
+			[]string{"mkdir", filepath.Join("/mnt", sourcePath)}...,
+		)
+	} else {
+		job.Spec.Template.Spec.Containers[0].Args = append(
+			job.Spec.Template.Spec.Containers[0].Args,
+			[]string{"mkdir", "-m", permission, filepath.Join("/mnt", sourcePath)}...,
+		)
+	}
+	return doNfsJob(ctx, job, driver.config.KubeClient, 5)
+}
+
+func changeModeSourcePath(ctx context.Context, ip, nasName, sourcePath, permission string, driver *NifcloudNasDriver) error {
+	if permission == "" {
+		return nil
+	}
+	glog.V(5).Infof("Changing source path mode: %s %s %s permission=%s", ip, nasName, sourcePath, permission)
 	job := nfsJob(ip, "/", nasName, "default")
 	job.Spec.Template.Spec.Containers[0].Args = append(
 		job.Spec.Template.Spec.Containers[0].Args,
-		[]string{"mkdir", filepath.Join("/mnt", sourcePath)}...,
+		[]string{"chmod", permission, filepath.Join("/mnt", sourcePath)}...,
 	)
 	return doNfsJob(ctx, job, driver.config.KubeClient, 5)
 }
