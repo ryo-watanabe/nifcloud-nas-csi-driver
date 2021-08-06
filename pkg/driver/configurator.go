@@ -3,9 +3,9 @@ package driver
 import (
 	"archive/tar"
 	"compress/gzip"
+	"encoding/json"
 	"fmt"
 	"net"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -619,7 +619,7 @@ func (c *Configurator) createBucket(bucketname string, secret *corev1.Secret) er
 		return fmt.Errorf("Marshalling json failed : %s", err.Error())
 	}
 	hdr := &tar.Header{
-		Name:     filepath.Join("/", secret.GetName() + ".json"),
+		Name:     filepath.Join("/", secret.GetName()+".json"),
 		Size:     int64(len(secretResource)),
 		Typeflag: tar.TypeReg,
 		Mode:     0755,
@@ -647,7 +647,7 @@ func (c *Configurator) createBucket(bucketname string, secret *corev1.Secret) er
 		Body:   uploadFile,
 	})
 	if err != nil {
-		return fmt.Errorf("Error uploading %s to bucket %s : %s", secret.GetName() + ".tgz", bucketname, err.Error())
+		return fmt.Errorf("Error uploading %s to bucket %s : %s", secret.GetName()+".tgz", bucketname, err.Error())
 	}
 	return nil
 }
@@ -698,7 +698,7 @@ func (c *Configurator) setSnapshotClasses() error {
 		}
 		// create new secret
 		newSecret := &corev1.Secret{
-			TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "Secret"},
+			TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Secret"},
 			ObjectMeta: metav1.ObjectMeta{
 				Name: "restic-creds",
 				Annotations: map[string]string{
