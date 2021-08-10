@@ -576,30 +576,47 @@ func (c *Configurator) getSnapshotClasses() (bool, error) {
 			mustUpdate = false
 		}
 	}
+	if mustUpdate {
+		glog.V(4).Infof("Configurator : snapshot classes must be updated")
+	}
 	return mustUpdate, nil
+}
+
+func regionFromEndpoint(ep string) string {
+	ep = strings.TrimPrefix(ep, "https://")
+	ep = strings.TrimPrefix(ep, "http://")
+	domains := strings.Split(ep, ".")
+	if len(domains) >= 1 {
+		return domains[0]
+	}
+	return ""
 }
 
 func (c *Configurator) createBucket(bucketname string, secret *corev1.Secret) error {
 	// creds
 	accesskey := os.Getenv("AWS_ACCESS_KEY_ID")
 	if accesskey == "" {
-		return fmt.Errorf("cannot get accesskey from env or secrets")
+		return fmt.Errorf("Configurator : cannot get accesskey from env")
 	}
 	secretkey := os.Getenv("AWS_SECRET_ACCESS_KEY")
 	if secretkey == "" {
-		return fmt.Errorf("cannot get secretkey from env or secrets")
+		return fmt.Errorf("Configurator : cannot get secretkey from env")
 	}
 	// session
-	ep := c.driver.config.DefaultSnapRegion + ".storage.api.nifcloud.com"
+	region := regionFromEndpoint(c.driver.config.DefaultSnapEndpoint)
+	glog.V(4).Infof(
+		"Configurator : initializing session - region:%s, endpoint:%s",
+		region, c.driver.config.DefaultSnapEndpoint,
+	)
 	creds := credentials.NewStaticCredentials(accesskey, secretkey, "")
-	sess, err := session.NewSession(&aws.Config{
+	sess, _ := session.NewSession(&aws.Config{
 		Credentials: creds,
-		Region:      aws.String(c.driver.config.DefaultSnapRegion),
-		Endpoint:    &ep,
+		Region:      aws.String(region),
+		Endpoint:    aws.String(c.driver.config.DefaultSnapEndpoint),
 	})
 	// create bucket
 	svc := s3.New(sess)
-	_, err = svc.CreateBucket(&s3.CreateBucketInput{Bucket: aws.String(bucketname)})
+	_, err := svc.CreateBucket(&s3.CreateBucketInput{Bucket: aws.String(bucketname)})
 	if err != nil {
 		return err
 	}
@@ -664,7 +681,7 @@ func (c *Configurator) setSnapshotClasses() error {
 	}
 	clusterID += clusterUID
 	bucketname := "csi-snapshot-" + rand.String(5)
-	repository := "s3:" + c.driver.config.DefaultSnapRegion + ".storage.api.nifcloud.com/" + bucketname
+	repository := "s3:" + c.driver.config.DefaultSnapEndpoint + "/" + bucketname
 	password := makePassword(clusterUID, 16)
 
 	cls, err := c.driver.config.SnapClient.SnapshotV1().VolumeSnapshotClasses().List(c.ctx, metav1.ListOptions{})

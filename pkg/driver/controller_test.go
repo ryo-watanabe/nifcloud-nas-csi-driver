@@ -42,6 +42,8 @@ func TestCreateVolume(t *testing.T) {
 		errOnCreate  bool
 		errAfterWait bool
 		errmsg       string
+		jobCmd       []string
+		optionUID    bool
 	}{
 		"valid volume 100Gi for request 10Gi": {
 			obj: []runtime.Object{
@@ -118,6 +120,15 @@ func TestCreateVolume(t *testing.T) {
 			res:  initCreateVolumeResponse("testregion/pvc-TESTPVCUID", 100*util.Gb, "192.168.100.0", ""),
 			post: []nas.NASInstance{initNASInstance("pvc-TESTPVCUID", "192.168.100.0", 100)},
 		},
+		"permission 777 from pvc annotation": { // with additional params below
+			obj: []runtime.Object{
+				newPVC("testpvc", "10Gi", "TESTPVCUID"),
+			},
+			req:    initCreateVolumeResquest("pvc-TESTPVCUID", 10*util.Gb, 0, "10.100.0.0/28", false),
+			res:    initCreateVolumeResponse("testregion/pvc-TESTPVCUID", 100*util.Gb, "10.100.0.0", ""),
+			post:   []nas.NASInstance{initNASInstance("pvc-TESTPVCUID", "10.100.0.0", 100)},
+			jobCmd: []string{"chmod", "777", "/mnt"},
+		},
 		"take neighbor ip": {
 			obj: []runtime.Object{
 				newPVC("testpvc", "100Gi", "TESTPVCUID"),
@@ -139,7 +150,30 @@ func TestCreateVolume(t *testing.T) {
 			res: initCreateVolumeResponse(
 				"testregion/cluster-TESTCLUSTERUID-shd001-"+sharedSuffix+"/pvc-TESTPVCUID",
 				100*util.Gb, "192.168.100.0", "pvc-TESTPVCUID"),
-			post: []nas.NASInstance{initNASInstance("cluster-TESTCLUSTERUID-shd001-"+sharedSuffix, "192.168.100.0", 500)},
+			post:   []nas.NASInstance{initNASInstance("cluster-TESTCLUSTERUID-shd001-"+sharedSuffix, "192.168.100.0", 500)},
+			jobCmd: []string{"mkdir", "/mnt/pvc-TESTPVCUID"},
+		},
+		"valid shared volume permission 777": { // with additional params below
+			obj: []runtime.Object{
+				newPVC("testpvc", "100Gi", "TESTPVCUID"),
+			},
+			req: initCreateVolumeResquest("pvc-TESTPVCUID", 100*util.Gb, 0, "192.168.100.0/28", true),
+			res: initCreateVolumeResponse(
+				"testregion/cluster-TESTCLUSTERUID-shd001-"+sharedSuffix+"/pvc-TESTPVCUID",
+				100*util.Gb, "192.168.100.0", "pvc-TESTPVCUID"),
+			post:   []nas.NASInstance{initNASInstance("cluster-TESTCLUSTERUID-shd001-"+sharedSuffix, "192.168.100.0", 500)},
+			jobCmd: []string{"mkdir", "-m", "777", "/mnt/pvc-TESTPVCUID"},
+		},
+		"valid shared volume with option UID": { // with additional params below
+			obj: []runtime.Object{
+				newPVC("testpvc", "100Gi", "TESTPVCUID"),
+			},
+			req: initCreateVolumeResquest("pvc-TESTPVCUID", 100*util.Gb, 0, "192.168.100.0/28", true),
+			res: initCreateVolumeResponse(
+				"testregion/cluster-OPTIONCLUSTERUID-shd001-"+sharedSuffix+"/pvc-TESTPVCUID",
+				100*util.Gb, "192.168.100.0", "pvc-TESTPVCUID"),
+			post:      []nas.NASInstance{initNASInstance("cluster-OPTIONCLUSTERUID-shd001-"+sharedSuffix, "192.168.100.0", 500)},
+			optionUID: true,
 		},
 		"room shared volume": {
 			obj: []runtime.Object{
@@ -175,6 +209,16 @@ func TestCreateVolume(t *testing.T) {
 	cases["ip from pvc annotation"].obj[0].(*corev1.PersistentVolumeClaim).ObjectMeta.Annotations = map[string]string{
 		"testDriverName/reservedIPv4Cidr": "192.168.100.0",
 	}
+	cases["permission 777 from pvc annotation"].obj[0].(*corev1.PersistentVolumeClaim).ObjectMeta.Annotations =
+		map[string]string{
+			"testDriverName/permission": "777",
+		}
+	cases["valid shared volume permission 777"].obj[0].(*corev1.PersistentVolumeClaim).ObjectMeta.Annotations =
+		map[string]string{
+			"testDriverName/permission": "777",
+		}
+	optionClusterUID := "cluster-OPTIONCLUSTERUID"
+	cases["valid shared volume with option UID"].post[0].NASSecurityGroups[0].NASSecurityGroupName = &optionClusterUID
 	cases["invalid shared capacity value"].req.Parameters["capacityParInstanceGiB"] = "500Gi"
 
 	flagVSet("4")
@@ -182,6 +226,9 @@ func TestCreateVolume(t *testing.T) {
 	for name, c := range cases {
 		t.Logf("====== Test case [%s] :", name)
 		ctl, _, cloud := initTestController(t, c.obj, c.jobFailed)
+		if c.optionUID {
+			ctl, _, cloud = initTestControllerWithOptionUID(t, c.obj, c.jobFailed)
+		}
 		cloud.NasInstances = c.pre
 		if c.errOnCreate {
 			cloud.StatusOnCreate = &statusUnknown
@@ -207,6 +254,12 @@ func TestCreateVolume(t *testing.T) {
 				t.Errorf("expected error not occurred in case [%s]\nexpected : %s", name, c.errmsg)
 			} else if !strings.Contains(err.Error(), c.errmsg) {
 				t.Errorf("error message not matched in case [%s]\nmust contains : %s\nbut got : %s", name, c.errmsg, err.Error())
+			}
+		}
+		// check job command
+		if len(c.jobCmd) > 0 {
+			if !reflect.DeepEqual(c.jobCmd, lastJobPodCmd) {
+				t.Errorf("job command not matched in case [%s]\nexpected : %v\nbut got  : %v", name, c.jobCmd, lastJobPodCmd)
 			}
 		}
 	}
@@ -700,6 +753,8 @@ func deletePV(volumeID string, kubeClient kubernetes.Interface) error {
 	)
 }
 
+var lastJobPodCmd []string
+
 func initTestController(
 	t *testing.T,
 	objects []runtime.Object,
@@ -723,12 +778,46 @@ func initTestController(
 		job.Status.Conditions = []batchv1.JobCondition{
 			batchv1.JobCondition{Type: jobCondition},
 		}
+		lastJobPodCmd = job.Spec.Template.Spec.Containers[0].Args
 		return false, job, nil
 	})
 	// init random
 	rand.Seed(1)
 
 	driver := initTestDriver(t, cloud, kubeClient, true, false)
+	return driver.cs, kubeClient, cloud
+}
+
+func initTestControllerWithOptionUID(
+	t *testing.T,
+	objects []runtime.Object,
+	jobFailed bool) (csi.ControllerServer, kubernetes.Interface, *FakeCloud) {
+
+	// test cloud
+	cloud := newFakeCloud()
+	// test k8s
+	kubeobjects := []runtime.Object{}
+	kubeobjects = append(kubeobjects, objects...)
+	kubeClient := k8sfake.NewSimpleClientset(kubeobjects...)
+	// all jobs are created with status Complete
+	jobCondition := batchv1.JobComplete
+	if jobFailed {
+		jobCondition = batchv1.JobFailed
+	}
+	kubeClient.Fake.PrependReactor("create", "jobs", func(action core.Action) (bool, runtime.Object, error) {
+		obj := action.(core.CreateAction).GetObject()
+		job, _ := obj.(*batchv1.Job)
+		job.Status.Conditions = []batchv1.JobCondition{
+			batchv1.JobCondition{Type: jobCondition},
+		}
+		lastJobPodCmd = job.Spec.Template.Spec.Containers[0].Args
+		return false, job, nil
+	})
+	// init random
+	rand.Seed(1)
+
+	driver := initTestDriver(t, cloud, kubeClient, true, false)
+	driver.config.ClusterUID = "OPTIONCLUSTERUID"
 	return driver.cs, kubeClient, cloud
 }
 

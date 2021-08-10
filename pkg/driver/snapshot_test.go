@@ -1,6 +1,10 @@
 package driver
 
 import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"strings"
 	"testing"
@@ -25,12 +29,19 @@ func TestCreateSnapshot(t *testing.T) {
 	ts, _ := time.Parse(time.RFC3339Nano, "2021-01-01T12:00:00.00Z")
 	tsp, _ := ptypes.TimestampProto(ts)
 
+	testStorageServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+		fmt.Fprintln(w, listAllBucketsResponse)
+	}))
+	defer testStorageServer.Close()
+	testStorageURL, _ := url.Parse(testStorageServer.URL)
+
 	cases := map[string]struct {
 		obj       []runtime.Object
 		podLogs   map[string]string
 		req       *csi.CreateSnapshotRequest
 		res       *csi.CreateSnapshotResponse
-		jobFailed bool
+		failedJob string
 		errmsg    string
 	}{
 		"valid snapshot": {
@@ -90,7 +101,7 @@ func TestCreateSnapshot(t *testing.T) {
 				Name:           "testSnapshot",
 				SourceVolumeId: "pvc-TESTPVCUID",
 			},
-			errmsg: "Error configure restic job : cannot get accesskey from env or secrets",
+			errmsg: "Error configure restic job : secrets must not be nil",
 		},
 		"snapshot job failed": {
 			obj: []runtime.Object{
@@ -107,37 +118,82 @@ func TestCreateSnapshot(t *testing.T) {
 					"resticPassword":   "testResticPassword",
 				},
 			},
-			jobFailed: true,
+			failedJob: "restic-job-list-snapshots",
 			errmsg:    "Error doing restic job - Job restic-job-list-snapshots failed",
 		},
-		/*
-			"snapshot summary parse failed": {
-				obj: []runtime.Object{
-					newPVC("testpvc", "10Gi", "TESTPVCUID"),
-					newPod("jobpod-backup", "default", "restic-job-backup-pvc-TESTPVCUID"),
+		"bucket not found": {
+			obj: []runtime.Object{
+				newPVC("testpvc", "10Gi", "TESTPVCUID"),
+				newPod("jobpod-list", "default", "restic-job-list-snapshots"),
+			},
+			podLogs: map[string]string{
+				"restic-job-list-snapshots": "specified key does not exist",
+			},
+			req: &csi.CreateSnapshotRequest{
+				Name:           "testSnapshot",
+				SourceVolumeId: "pvc-TESTPVCUID",
+				Secrets: map[string]string{
+					"accesskey":        "testAccessKey",
+					"secretkey":        "testSecretKey",
+					"resticRepository": "s3:http//" + testStorageURL.Hostname() + ":" + testStorageURL.Port() + "/bucket",
+					"resticPassword":   "testResticPassword",
 				},
-				podLogs: map[string]string{
-					"restic-job-backup-pvc-TESTPVCUID": "fake logs",
+			},
+			failedJob: "restic-job-list-snapshots",
+			errmsg:    "Checking bucket failed : bucket not found",
+		},
+		"initialize repository": {
+			obj: []runtime.Object{
+				newPVC("testpvc", "10Gi", "TESTPVCUID"),
+				newPod("jobpod-list", "default", "restic-job-list-snapshots"),
+				newPod("jobpod-init", "default", "restic-job-init"),
+			},
+			podLogs: map[string]string{
+				"restic-job-list-snapshots": "specified key does not exist",
+			},
+			req: &csi.CreateSnapshotRequest{
+				Name:           "testSnapshot",
+				SourceVolumeId: "pvc-TESTPVCUID",
+				Secrets: map[string]string{
+					"accesskey":        "testAccessKey",
+					"secretkey":        "testSecretKey",
+					"resticRepository": "s3:http//" + testStorageURL.Hostname() + ":" + testStorageURL.Port() + "/my-first-bucket",
+					"resticPassword":   "testResticPassword",
 				},
-				req: &csi.CreateSnapshotRequest{
-					Name:           "testSnapshot",
-					SourceVolumeId: "pvc-TESTPVCUID",
-					Secrets: map[string]string{
-						"accesskey":        "testAccessKey",
-						"secretkey":        "testSecretKey",
-						"resticRepository": "testResticRepository",
-						"resticPassword":   "testResticPassword",
-					},
+			},
+			failedJob: "restic-job-list-snapshots",
+			errmsg:    "Cannot find pod for job restic-job-backup-pvc-TESTPVCUID", // will stops here
+		},
+		"snapshot summary parse failed": {
+			obj: []runtime.Object{
+				newPVC("testpvc", "10Gi", "TESTPVCUID"),
+				newPod("jobpod-backup", "default", "restic-job-backup-pvc-TESTPVCUID"),
+				newPod("jobpod-list", "default", "restic-job-list-snapshots"),
+			},
+			podLogs: map[string]string{
+				"restic-job-backup-pvc-TESTPVCUID": "fake logs",
+				"restic-job-list-snapshots": "[{\"short_id\":\"testSnapshotId\"," +
+					"\"time\":\"2021-01-01T12:00:00.00Z\",\"paths\":[\"TESTCLUSTERUID/TESTPVCUID\"]}]",
+			},
+			req: &csi.CreateSnapshotRequest{
+				Name:           "testSnapshot",
+				SourceVolumeId: "pvc-TESTPVCUID",
+				Secrets: map[string]string{
+					"accesskey":        "testAccessKey",
+					"secretkey":        "testSecretKey",
+					"resticRepository": "testResticRepository",
+					"resticPassword":   "testResticPassword",
 				},
-				errmsg: "Error persing restic backup summary : invalid character 'k' in literal false",
-			},*/
+			},
+			errmsg: "Error persing restic backup summary : unexpected end of JSON input",
+		},
 	}
 
 	flagVSet("4")
 
 	for name, c := range cases {
 		t.Logf("====== Test case [%s] :", name)
-		ctl, _, _ := initTestController(t, c.obj, c.jobFailed)
+		ctl := initTestControllerSnapshot(t, c.obj, []runtime.Object{}, c.failedJob)
 		// test the case
 		testResticPodLog = c.podLogs
 		res, err := ctl.CreateSnapshot(context.TODO(), c.req)
@@ -163,7 +219,7 @@ func TestDeleteSnapshot(t *testing.T) {
 		obj       []runtime.Object
 		podLogs   map[string]string
 		req       *csi.DeleteSnapshotRequest
-		jobFailed bool
+		failedJob string
 		errmsg    string
 	}{
 		"successfully deleted snapshot": {
@@ -200,7 +256,7 @@ func TestDeleteSnapshot(t *testing.T) {
 
 	for name, c := range cases {
 		t.Logf("====== Test case [%s] :", name)
-		ctl, _, _ := initTestController(t, c.obj, c.jobFailed)
+		ctl := initTestControllerSnapshot(t, c.obj, []runtime.Object{}, c.failedJob)
 		// test the case
 		testResticPodLog = c.podLogs
 		_, err := ctl.DeleteSnapshot(context.TODO(), c.req)
@@ -230,7 +286,7 @@ func TestListSnapshot(t *testing.T) {
 		podLogs   map[string]string
 		req       *csi.ListSnapshotsRequest
 		res       *csi.ListSnapshotsResponse
-		jobFailed bool
+		failedJob string
 		errmsg    string
 	}{
 		"successfully get list": {
@@ -332,7 +388,7 @@ func TestListSnapshot(t *testing.T) {
 
 	for name, c := range cases {
 		t.Logf("====== Test case [%s] :", name)
-		ctl, _, _ := initTestController(t, c.obj, c.jobFailed)
+		ctl := initTestControllerSnapshot(t, c.obj, []runtime.Object{}, c.failedJob)
 		// test the case
 		testResticPodLog = c.podLogs
 		res, err := ctl.ListSnapshots(context.TODO(), c.req)
@@ -412,7 +468,7 @@ func TestRestoreSnapshot(t *testing.T) {
 		podLogs   map[string]string
 		req       *csi.CreateVolumeRequest
 		res       *csi.CreateVolumeResponse
-		jobFailed bool
+		failedJob string
 		errmsg    string
 	}{
 		"successfully volume restored": {
@@ -490,7 +546,7 @@ func TestRestoreSnapshot(t *testing.T) {
 
 	for name, c := range cases {
 		t.Logf("====== Test case [%s] :", name)
-		ctl := initTestControllerSnapshot(t, c.obj, c.sObj, c.jobFailed)
+		ctl := initTestControllerSnapshot(t, c.obj, c.sObj, c.failedJob)
 		testResticPodLog = c.podLogs
 		res, err := ctl.CreateVolume(context.TODO(), c.req)
 		if c.errmsg == "" {
@@ -513,7 +569,7 @@ func initTestControllerSnapshot(
 	t *testing.T,
 	objects []runtime.Object,
 	sObjects []runtime.Object,
-	jobFailed bool) csi.ControllerServer {
+	failedJob string) csi.ControllerServer {
 	// test cloud
 	cloud := newFakeCloud()
 	// test k8s
@@ -525,16 +581,18 @@ func initTestControllerSnapshot(
 	snapobjects := []runtime.Object{}
 	snapobjects = append(snapobjects, sObjects...)
 	snapClient := snapfake.NewSimpleClientset(snapobjects...)
-	// all jobs are created with status Complete
-	jobCondition := batchv1.JobComplete
-	if jobFailed {
-		jobCondition = batchv1.JobFailed
-	}
+	// jobs are created with status Complete or Failed
 	kubeClient.Fake.PrependReactor("create", "jobs", func(action core.Action) (bool, runtime.Object, error) {
 		obj := action.(core.CreateAction).GetObject()
 		job, _ := obj.(*batchv1.Job)
-		job.Status.Conditions = []batchv1.JobCondition{
-			batchv1.JobCondition{Type: jobCondition},
+		if job.GetName() == failedJob || failedJob == "all" {
+			job.Status.Conditions = []batchv1.JobCondition{
+				batchv1.JobCondition{Type: batchv1.JobFailed},
+			}
+		} else {
+			job.Status.Conditions = []batchv1.JobCondition{
+				batchv1.JobCondition{Type: batchv1.JobComplete},
+			}
 		}
 		return false, job, nil
 	})
@@ -560,3 +618,20 @@ func initTestControllerSnapshot(
 
 	return driver.cs
 }
+
+const listAllBucketsResponse = `<ListAllMyBucketsResult xmlns="http://doc.s3.amazonaws.com/doc/2006-03-01/">
+  <Owner>
+    <ID>NCSS|ABC12345</ID>
+    <DisplayName>ABC12345</DisplayName>
+  </Owner>
+  <Buckets>
+    <Bucket>
+     <Name>my-first-bucket</Name>
+     <CreationDate>2016-06-29T00:00:00.000Z</CreationDate>
+   </Bucket>
+   <Bucket>
+     <Name>sample-bucket</Name>
+     <CreationDate>2011-09-29T01:00:00.000Z</CreationDate>
+   </Bucket>
+  </Buckets>
+</ListAllMyBucketsResult>`

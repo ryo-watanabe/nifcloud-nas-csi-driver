@@ -35,25 +35,25 @@ import (
 
 // NifcloudNasDriverConfig holds CSI options
 type NifcloudNasDriverConfig struct {
-	Name              string               // Driver name
-	Version           string               // Driver version
-	NodeID            string               // Node name
-	PrivateIfName     string               // Private network interface name
-	RunController     bool                 // Run CSI controller service
-	RunNode           bool                 // Run CSI node service
-	Mounter           mount.Interface      // Mount library
-	Cloud             cloud.Interface      // Cloud provider
-	KubeClient        kubernetes.Interface // k8s client
-	SnapClient        clientset.Interface  // snapshot client
-	InitBackoff       time.Duration
-	PrivateIPReg      bool
-	Configurator      bool
-	RestoreClstID     bool
-	Hatoba            bool
-	CidrBlkRcmd       bool
-	CfgSnapRepo       bool
-	DefaultSnapRegion string
-	ClusterUID        string
+	Name                string               // Driver name
+	Version             string               // Driver version
+	NodeID              string               // Node name
+	PrivateIfName       string               // Private network interface name
+	RunController       bool                 // Run CSI controller service
+	RunNode             bool                 // Run CSI node service
+	Mounter             mount.Interface      // Mount library
+	Cloud               cloud.Interface      // Cloud provider
+	KubeClient          kubernetes.Interface // k8s client
+	SnapClient          clientset.Interface  // snapshot client
+	InitBackoff         time.Duration
+	PrivateIPReg        bool
+	Configurator        bool
+	RestoreClstID       bool
+	Hatoba              bool
+	CidrBlkRcmd         bool
+	CfgSnapRepo         bool
+	DefaultSnapEndpoint string
+	ClusterUID          string
 }
 
 // NifcloudNasDriver a CSI driver

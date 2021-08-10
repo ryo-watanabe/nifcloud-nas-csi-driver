@@ -244,4 +244,3 @@ func validatePermission(permission string) error {
 	}
 	return nil
 }
-

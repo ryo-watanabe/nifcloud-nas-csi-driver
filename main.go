@@ -46,8 +46,9 @@ var (
 	configurator  = flag.Bool("configurator", true, "run configurator")
 	restoreClstID = flag.Bool("restoreclstid", true, "restore NASSecurityGroup name on starting of controller")
 	devCloudEP    = flag.String("devcloudep", "", "dev cloud endpoint")
-	defSnapRegion = flag.String("defaultsnapregion", "jp-east-2", "snapshot objectstore region used in configurator")
-	clusterUID    = flag.String("clusteruid", "", "cluster UID default:kube-system namespace UID")
+	defSnapEP     = flag.String("defaultsnapendpoint", "jp-east-2.storage.api.nifcloud.com",
+		"snapshot objectstore endpoint used in configurator")
+	clusterUID = flag.String("clusteruid", "", "cluster UID default:kube-system namespace UID")
 
 	version  = "v0.6.0c"
 	revision = "undef"
@@ -96,24 +97,24 @@ func main() {
 	}
 	mounter := mount.New("")
 	config := &driver.NifcloudNasDriverConfig{
-		Name:              driverName,
-		Version:           version,
-		NodeID:            *nodeID,
-		PrivateIfName:     *privateIfName,
-		RunController:     *runController,
-		RunNode:           *runNode,
-		Mounter:           mounter,
-		Cloud:             provider,
-		KubeClient:        kubeClient,
-		SnapClient:        snapClient,
-		PrivateIPReg:      *privateIPReg,
-		Configurator:      *configurator,
-		RestoreClstID:     *restoreClstID,
-		Hatoba:            *hatoba,
-		CidrBlkRcmd:       *cidrBlkRcmd,
-		CfgSnapRepo:       *cfgSnapRepo,
-		DefaultSnapRegion: *defSnapRegion,
-		ClusterUID:        *clusterUID,
+		Name:                driverName,
+		Version:             version,
+		NodeID:              *nodeID,
+		PrivateIfName:       *privateIfName,
+		RunController:       *runController,
+		RunNode:             *runNode,
+		Mounter:             mounter,
+		Cloud:               provider,
+		KubeClient:          kubeClient,
+		SnapClient:          snapClient,
+		PrivateIPReg:        *privateIPReg,
+		Configurator:        *configurator,
+		RestoreClstID:       *restoreClstID,
+		Hatoba:              *hatoba,
+		CidrBlkRcmd:         *cidrBlkRcmd,
+		CfgSnapRepo:         *cfgSnapRepo,
+		DefaultSnapEndpoint: *defSnapEP,
+		ClusterUID:          *clusterUID,
 	}
 
 	nfnsDriver, err := driver.NewNifcloudNasDriver(config)

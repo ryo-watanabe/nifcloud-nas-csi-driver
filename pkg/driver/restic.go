@@ -98,6 +98,9 @@ type restic struct {
 
 func newRestic(secrets map[string]string) (*restic, error) {
 
+	if secrets == nil {
+		return nil, fmt.Errorf("secrets must not be nil")
+	}
 	if secrets["accesskey"] == "" {
 		accesskey := os.Getenv("AWS_ACCESS_KEY_ID")
 		if accesskey == "" {

@@ -2,16 +2,22 @@ package driver
 
 import (
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	snapfake "github.com/kubernetes-csi/external-snapshotter/client/v4/clientset/versioned/fake"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
+	core "k8s.io/client-go/testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws/awserr"
 	"github.com/nifcloud/nifcloud-sdk-go/service/computing"
@@ -355,6 +361,15 @@ func TestRunConfigurator(t *testing.T) {
 		newNamespace("kube-system", "TESTCLUSTERUID"),
 	}
 	kubeClient := k8sfake.NewSimpleClientset(kubeobjects...)
+	kubeClient.Fake.PrependReactor("create", "secrets", func(action core.Action) (bool, runtime.Object, error) {
+		obj := action.(core.CreateAction).GetObject()
+		secret, _ := obj.(*corev1.Secret)
+		secret.Data = make(map[string][]byte)
+		for key, value := range secret.StringData {
+			secret.Data[key] = []byte(value)
+		}
+		return false, secret, nil
+	})
 
 	// test cloud
 	cloud := newFakeCloud()
@@ -366,17 +381,34 @@ func TestRunConfigurator(t *testing.T) {
 		},
 	)
 
+	// test snapshot client
+	snapobjects := []runtime.Object{}
+	//snapobjects = append(snapobjects, sObjects...)
+	snapClient := snapfake.NewSimpleClientset(snapobjects...)
+
+	// test storage endpoint
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+	}))
+	url, _ := url.Parse(ts.URL)
+	endpoint := "http://region." + url.Hostname() + ".nip.io:" + url.Port()
+	_ = os.Setenv("AWS_ACCESS_KEY_ID", "accesskey")
+	_ = os.Setenv("AWS_SECRET_ACCESS_KEY", "secretkey")
+
 	config := &NifcloudNasDriverConfig{
-		Name:          "testDriverName",
-		Version:       "testDriverVersion",
-		NodeID:        "testNodeID",
-		RunController: true,
-		RunNode:       false,
-		KubeClient:    kubeClient,
-		Cloud:         cloud,
-		InitBackoff:   1,
-		Configurator:  true,
-		Hatoba:        true,
+		Name:                "testDriverName",
+		Version:             "testDriverVersion",
+		NodeID:              "testNodeID",
+		RunController:       true,
+		RunNode:             false,
+		KubeClient:          kubeClient,
+		Cloud:               cloud,
+		InitBackoff:         1,
+		Configurator:        true,
+		Hatoba:              true,
+		CfgSnapRepo:         true,
+		SnapClient:          snapClient,
+		DefaultSnapEndpoint: endpoint,
 	}
 
 	driver, _ := NewNifcloudNasDriver(config)
@@ -385,6 +417,9 @@ func TestRunConfigurator(t *testing.T) {
 	}()
 	time.Sleep(time.Duration(2) * time.Second)
 	driver.Stop()
+	ts.Close()
+	_ = os.Unsetenv("AWS_ACCESS_KEY_ID")
+	_ = os.Unsetenv("AWS_SECRET_ACCESS_KEY")
 
 	// check cloud actions
 	expActions := []string{
@@ -421,6 +456,7 @@ func initTestConfigurator(t *testing.T, obj []runtime.Object) (*Configurator, ku
 
 	driver := initTestDriver(t, cloud, kubeClient, true, false)
 	driver.config.Configurator = true
+
 	return newConfigurator(driver), kubeClient, cloud
 }
 

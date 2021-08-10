@@ -258,7 +258,10 @@ func makeSourcePath(ctx context.Context, ip, nasName, sourcePath, permission str
 	return doNfsJob(ctx, job, driver.config.KubeClient, 5)
 }
 
-func changeModeSourcePath(ctx context.Context, ip, nasName, sourcePath, permission string, driver *NifcloudNasDriver) error {
+func changeModeSourcePath(
+	ctx context.Context, ip, nasName, sourcePath, permission string,
+	driver *NifcloudNasDriver) error {
+
 	if permission == "" {
 		return nil
 	}
