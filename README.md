@@ -30,10 +30,11 @@ Controller options
 |----|----|----|
 |configurator|true|Auto configure node private IPs, zone and networkID|
 |hatoba|false|For clusters of nifcloud hatoba|
-|recommendcidr|false|configure recommended cidr block (experimental)|
-|cfgsnaprepo|false|configure snapshot repository|
+|recommendcidr|false|Configure recommended cidr block (experimental)|
+|cfgsnaprepo|false|Configure snapshot repository and create a bucket|
+|defaultsnapendpoint|jp-east-2.storage.api.nifcloud.com|Object store endpoint used in configuring snapshot repository|
 |restoreclstid|true|Restore NASSecurityGroup name on starting of controller|
-|clusteruid|kube-system namespace's UID|Restore NASSecurityGroup name on starting of controller|
+|clusteruid|kube-system namespace's UID|Unique ID for the cluster|
 
 #### Run node
 ````
