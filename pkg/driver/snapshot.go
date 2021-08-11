@@ -74,14 +74,14 @@ func (s *controllerServer) CreateSnapshot(
 	if err != nil {
 		if strings.Contains(err.Error(), "specified key does not exist") {
 			// first snapshot for the cluster, create repository
-			// check bucket, create if not exist
+			// check the bucket
 			err = r.checkBucket()
 			if err != nil {
-				return nil, status.Error(codes.Internal, "creating bucket for the repository failed : "+err.Error())
+				return nil, status.Error(codes.Internal, "Checking bucket failed : "+err.Error())
 			}
 			// initialize repository
 			initJob, secret := r.resticJobInit()
-			_, err = doResticJob(ctx, initJob, secret, s.config.driver.config.KubeClient, 5)
+			_, err = doResticJob(ctx, initJob, secret, s.config.driver.config.KubeClient, 30)
 			if err != nil {
 				return nil, status.Error(codes.Internal, "Initializing repository failed : "+err.Error())
 			}
@@ -92,7 +92,7 @@ func (s *controllerServer) CreateSnapshot(
 
 	// Backup job
 	// Get kube-system UID for cluster ID
-	clusterUID, err := getNamespaceUID(ctx, "kube-system", s.config.driver)
+	clusterUID, err := getClusterUID(ctx, s.config.driver)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "Error getting namespace UID : "+err.Error())
 	}

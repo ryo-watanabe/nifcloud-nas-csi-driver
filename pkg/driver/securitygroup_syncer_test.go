@@ -295,7 +295,7 @@ func TestRunInitSecuritygroupSync(t *testing.T) {
 		newPVC("testpvc", "100Gi", "TESTPVCUID"),
 		newPV("pvc-TESTPVCUID", "testregion/pvc-TESTPVCUID", "100Gi"),
 		newCSINode("testNodeID1", "192.168.0.1"),
-		newNamespace("kube-system", "TESTCLUSTERUID2"),
+		//newNamespace("kube-system", "TESTCLUSTERUID2"),
 		newStorageClass("testStorageClass", testZone, "", ""),
 	}
 	kubeClient := k8sfake.NewSimpleClientset(kubeobjects...)
@@ -316,6 +316,7 @@ func TestRunInitSecuritygroupSync(t *testing.T) {
 		Cloud:         cloud,
 		InitBackoff:   1,
 		RestoreClstID: true,
+		ClusterUID:    "TESTCLUSTERUID2",
 	}
 
 	driver, _ := NewNifcloudNasDriver(config)

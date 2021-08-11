@@ -232,3 +232,15 @@ func makePassword(str string, n int) string {
 	}
 	return string(b)
 }
+
+func validatePermission(permission string) error {
+	if len(permission) != 3 {
+		return fmt.Errorf("permission length must be 3 (ex:755)")
+	}
+	for _, c := range permission {
+		if c < '0' || c > '7' {
+			return fmt.Errorf("permission character must be 0-7")
+		}
+	}
+	return nil
+}

@@ -10,17 +10,13 @@ NAS CSI driver for k8s clusters running on nifcloud
 - Delete NASInstances on deletion of the PVC
 
 ## Options
-|param|default| | |
-|----|----|----|----|
-|endpoint|unix:/tmp/csi.sock|CSI endpoint|Optional|
-|nodeid||node name in k8s cluster|Required when node=true|
-|region|jp-east-1|nifcloud region|Optional|
-|kubeconfig||file path for kubeconfig|Optional|
-|controller|false|run controller service|Optional|
-|node|false|run node service|Optional|
-|configurator|true|auto configure node private IPs, zone, networkID and recommended CIDR block|Optional|
-|privateipreg|false|register node private IPs from interfaces|Optional<br><br>Set true when configurator is false and confirm privateifname |
-|privateifname|ens192|interface name of private network|Optional|
+|param|default| |
+|----|----|----|
+|endpoint|unix:/tmp/csi.sock|CSI endpoint|
+|region|jp-east-1|nifcloud region|
+|controller|false|run controller service|
+|node|false|run node service|
+|kubeconfig||file path for kubeconfig|
 
 #### Run controller
 ````
@@ -28,6 +24,18 @@ $ /nifcloud-nas-csi-driver \
 --endpoint=unix:/csi/csi.sock
 --controller=true
 ````
+Controller options
+
+|param|default| |
+|----|----|----|
+|configurator|true|Auto configure node private IPs, zone and networkID|
+|hatoba|false|For clusters of nifcloud hatoba|
+|recommendcidr|false|Configure recommended cidr block (experimental)|
+|cfgsnaprepo|false|Configure snapshot repository and create a bucket|
+|defaultsnapendpoint|jp-east-2.storage.api.nifcloud.com|Object store endpoint used in configuring snapshot repository|
+|restoreclstid|true|Restore NASSecurityGroup name on starting of controller|
+|clusteruid|kube-system namespace's UID|Unique ID for the cluster|
+
 #### Run node
 ````
 $ /nifcloud-nas-csi-driver \
@@ -55,6 +63,13 @@ volumeMounts:
     mountPropagation: "Bidirectional"
 :
 ````
+Node options
+
+|param|default| | |
+|----|----|----|----|
+|nodeid||node name in k8s cluster|Required when node=true|
+|privateipreg|false|Register node private IPs from interfaces|Set true when contriller's configurator=false|
+|privateifname|ens192|Interface name of private network|Valid when privateipreg=true|
 
 ## Deploy and usage
 
@@ -195,7 +210,11 @@ parameters:
 - Create another shared NASInstance when requested resource sum of PVCs exceeds its capacity.
 - Delete shared NASInstance when all PVCs deleted.
 
-### Setting NAS private IP in PVC annotations
+### Configure NAS persistent volume with PVC annotations
+|annotation(nas.csi.storage.nifcloud.com)||example|default|
+|----|----|----|----|
+|reservedIPv4Cidr|IP or IP range for NAS Instance|172.16.10.128 192.168.0.64/27|StorageClass' reservedIPv4Cidr|
+|permission|Initial permission of mounted directory|"777"|"755"|
 
 ```
 kind: PersistentVolumeClaim
@@ -204,6 +223,7 @@ metadata:
   name: test-pvc
   annotations:
     nas.csi.storage.nifcloud.com/reservedIPv4Cidr: 192.168.10.64
+    nas.csi.storage.nifcloud.com/permission: "777"
 spec:
   accessModes:
     - ReadWriteMany
@@ -212,8 +232,6 @@ spec:
     requests:
       storage: 100Gi
 ```
-- IP address like "192.168.10.64" can be used same as "192.168.10.64/32"
-- If no annotations set, StorageClass parameter reservedIPv4Cidr is used for private IP selection
 
 # Volume Snapshots
 

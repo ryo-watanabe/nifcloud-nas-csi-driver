@@ -115,30 +115,42 @@ func (s *controllerServer) pvDeleted(obj interface{}) {
 	s.config.deletingPvsQueue.UnsetQueue(key)
 }
 
-// Get reserved CIDRIP from PVC's annotations
-func getIpv4CiderFromPVC(ctx context.Context, name string, driver *NifcloudNasDriver) (string, error) {
+// Get reserved CIDRIP and permission from PVC's annotations
+func getAnnotationsFromPVC(ctx context.Context, name string, driver *NifcloudNasDriver) (string, string, error) {
 	kubeClient := driver.config.KubeClient
 	pvcUIDs := strings.SplitN(name, "-", 2)
 	if len(pvcUIDs) < 2 {
-		return "", fmt.Errorf("Error getting IP from PVC : Cannot split UID")
+		return "", "", fmt.Errorf("Error getting IP from PVC : Cannot split UID")
 	}
 	pvcs, err := kubeClient.CoreV1().PersistentVolumeClaims("").List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return "", fmt.Errorf("Error getting PVC list : %s", err.Error())
+		return "", "", fmt.Errorf("Error getting PVC list : %s", err.Error())
 	}
 	for _, pvc := range pvcs.Items {
 		if string(pvc.ObjectMeta.GetUID()) == pvcUIDs[1] {
-			if cidrip, ok := pvc.ObjectMeta.GetAnnotations()[driver.config.Name+"/reservedIPv4Cidr"]; ok {
-				if !strings.Contains(cidrip, "/") {
-					cidrip = cidrip + "/32"
+			cidrip := ""
+			permission := ""
+			if value, ok := pvc.ObjectMeta.GetAnnotations()[driver.config.Name+"/reservedIPv4Cidr"]; ok {
+				if !strings.Contains(value, "/") {
+					value = value + "/32"
 				}
-				return cidrip, nil
+				err = validateCIDRIP(value)
+				if err != nil {
+					return "", "", fmt.Errorf("Error getting PVC annotation : %s", err.Error())
+				}
+				cidrip = value
 			}
-			// PVC without annotation is acceptable
-			return "", nil
+			if value, ok := pvc.ObjectMeta.GetAnnotations()[driver.config.Name+"/permission"]; ok {
+				err = validatePermission(value)
+				if err != nil {
+					return "", "", fmt.Errorf("Error getting PVC annotation : %s", err.Error())
+				}
+				permission = value
+			}
+			return cidrip, permission, nil
 		}
 	}
-	return "", fmt.Errorf("Error PVC %s not found", pvcUIDs[1])
+	return "", "", fmt.Errorf("Error PVC %s not found", pvcUIDs[1])
 }
 
 func (s *controllerServer) waitForNASInstanceAvailable(name string) error {
@@ -341,6 +353,14 @@ func (s *controllerServer) CreateVolume(
 		snapshotID = sourceSnapshot.GetSnapshotId()
 	}
 
+	// get annotations from PVC
+	var reservedIPv4CIDR, permission string
+	reservedIPv4CIDR, permission, err = getAnnotationsFromPVC(ctx, req.GetName(), s.config.driver)
+	if err != nil {
+		err = status.Error(codes.InvalidArgument, err.Error())
+		return
+	}
+
 	// Check if the instance already exists
 	n, err := s.config.cloud.GetNasInstance(ctx, name)
 	if err != nil && !cloud.IsNotFoundErr(err) {
@@ -355,15 +375,10 @@ func (s *controllerServer) CreateVolume(
 		}
 
 	} else {
+
 		if nasInput.NetworkId != nil {
 
 			// If we are creating a new instance, we need pick an unused ip from reserved-ipv4-cidr
-			var reservedIPv4CIDR string
-			reservedIPv4CIDR, err = getIpv4CiderFromPVC(ctx, req.GetName(), s.config.driver)
-			if err != nil {
-				err = status.Error(codes.InvalidArgument, err.Error())
-				return
-			}
 			if reservedIPv4CIDR == "" {
 				reservedIPv4CIDR = req.GetParameters()["reservedIpv4Cidr"]
 				if reservedIPv4CIDR == "" {
@@ -445,9 +460,17 @@ func (s *controllerServer) CreateVolume(
 
 	// Make source path for shared NAS instance
 	if req.GetParameters()["shared"] == "true" {
-		err = makeSourcePath(ctx, getNasInstancePrivateIP(n), *n.NASInstanceIdentifier, req.GetName(), s.config.driver)
+		err = makeSourcePath(
+			ctx, getNasInstancePrivateIP(n), *n.NASInstanceIdentifier, req.GetName(), permission, s.config.driver)
 		if err != nil {
 			err = status.Error(codes.Internal, "error making source path for shared NASInstance:"+err.Error())
+			return
+		}
+	} else if permission != "" {
+		err = changeModeSourcePath(
+			ctx, getNasInstancePrivateIP(n), *n.NASInstanceIdentifier, "", permission, s.config.driver)
+		if err != nil {
+			err = status.Error(codes.Internal, "error changing source path mode for NASInstance:"+err.Error())
 			return
 		}
 	}
