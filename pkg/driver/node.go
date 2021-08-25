@@ -32,7 +32,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/utils/mount"
+	mount "k8s.io/mount-utils"
 )
 
 var (
@@ -115,10 +115,15 @@ func (s *nodeServer) NodePublishVolume(ctx context.Context,
 		// On Windows the mount target must not exist
 		if goOs != "windows" {
 			// Make target path
-			err = os.MkdirAll(targetPath, 0755) //nolint:gosec
+			err = os.MkdirAll(targetPath, os.ModePerm)
 			if err != nil {
 				return nil, fmt.Errorf("Error making target path %s: %s", targetPath, err.Error())
 			}
+			info, err := os.Stat(targetPath)
+			if err != nil {
+				return nil, fmt.Errorf("Error stat target path %s: %s", targetPath, err.Error())
+			}
+			glog.Infof("Directory %s created with mode:%s", targetPath, info.Mode())
 		}
 	}
 

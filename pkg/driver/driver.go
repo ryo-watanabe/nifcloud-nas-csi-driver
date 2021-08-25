@@ -28,7 +28,7 @@ import (
 	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/utils/mount"
+	mount "k8s.io/mount-utils"
 
 	"github.com/ryo-watanabe/nifcloud-nas-csi-driver/pkg/cloud"
 )
