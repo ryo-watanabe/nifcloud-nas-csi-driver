@@ -1,11 +1,12 @@
-# Binaries, configs
+# Running controller on systemd master
+## Binaries, configs
 Prepare binaries of driver and csi-provisioner(sidecar) from https://github.com/kubernetes-csi/external-provisioner
 ```
 chmod +x csi-provisioner nifcloud-nas-csi-driver
 mv csi-provisioner nifcloud-nas-csi-driver /usr/local/bin/
 mkdir /etc/kubernetes/csi
 ```
-# Unit files
+## Unit files
 (TODO) Prepare a kubeconfig for csi, currently using admin.kubeconfig
 
 /etc/systemd/system/csi-provisioner.service
@@ -47,7 +48,7 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 ```
-# Start sidecar and controller
+## Start sidecar and controller
 ```
 systemctl enable csi-provisioner csi-controller
 systemctl daemon-reload
@@ -92,14 +93,14 @@ Mar 16 17:01:46 rootless01m1 nfcl-nas-csi-driver[3050843]: I0316 17:01:46.259355
 Mar 16 17:01:46 rootless01m1 nfcl-nas-csi-driver[3050843]: I0316 17:01:46.311367 3050843 main.go:92] Running driver...
 Mar 16 17:01:46 rootless01m1 nfcl-nas-csi-driver[3050843]: I0316 17:01:46.311383 3050843 driver.go:215] Running driver: nas.csi.storage.nifcloud.com
 ```
-# Start CSI Node by DaemonSet
+## Start CSI Node by DaemonSet
 ```
 # kubectl get pod -n nifcloud-nas-csi-driver -o wide
 NAME                          READY   STATUS    RESTARTS   AGE    IP             NODE           NOMINATED NODE   READINESS GATES
 nifcloud-nas-csi-node-5l54w   2/2     Running   0          112m   164.70.0.195   rootless01w1   <none>           <none>
 nifcloud-nas-csi-node-dj7l6   2/2     Running   0          112m   164.70.8.161   rootless01w2   <none>           <none>
 ```
-# Creating a Pod with PVC
+## Creating a Pod with PVC
 ```
 apiVersion: v1
 kind: PersistentVolumeClaim
